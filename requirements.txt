@@ -4,3 +4,4 @@ anthropic>=0.69,<1
 pydantic>=2.6,<3
 pyyaml>=6.0,<7
 reportlab>=4.1,<5
+flask>=3.0,<4

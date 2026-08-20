@@ -6,6 +6,7 @@ from typing import Any
 
 import anthropic
 
+from src.common.profile import format_profile_for_prompt
 from src.proposals.schema import ProposalPackage
 
 DEFAULT_MODEL = "claude-opus-5"
@@ -36,22 +37,8 @@ forma de pagamento, propriedade intelectual, confidencialidade, rescisão e foro
 """
 
 
-def _format_profile_for_prompt(profile: dict[str, Any]) -> dict[str, str]:
-    return {
-        "freelancer_name": profile.get("freelancer_name", "[freelancer]"),
-        "services": profile.get("services", "desenvolvimento de sites e sistemas"),
-        "tone": profile.get("tone", "profissional e direto"),
-        "pricing_model": profile.get("pricing_model", "projeto fechado"),
-        "payment_terms": profile.get("payment_terms", "50% de entrada, 50% na entrega"),
-        "standard_clauses": ", ".join(profile.get("standard_clauses", [])) or "nenhuma adicional",
-        "jurisdiction": profile.get("jurisdiction", "[a preencher]"),
-        "contact": profile.get("contact", "[a preencher]"),
-        "language": profile.get("language", "português do Brasil"),
-    }
-
-
 def build_system_prompt(profile: dict[str, Any]) -> str:
-    return SYSTEM_TEMPLATE.format(**_format_profile_for_prompt(profile))
+    return SYSTEM_TEMPLATE.format(**format_profile_for_prompt(profile))
 
 
 def generate_proposal_package(

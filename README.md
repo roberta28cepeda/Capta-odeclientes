@@ -108,6 +108,44 @@ terminal. Use `--context` para passar um `.txt` com informações adicionais
 python -m pytest -q
 ```
 
+## Módulo: Inbox + sugestão de resposta
+
+Recebe uma mensagem de um lead/cliente (email, WhatsApp, formulário — o canal
+não importa, você só passa o texto) e sugere uma resposta pronta no seu tom,
+já classificando categoria (dúvida, objeção de preço, orçamento, fechamento,
+reclamação...) e prioridade. Funciona tanto por linha de comando (teste
+local) quanto como um webhook HTTP simples para plugar em qualquer
+integração (Zapier, n8n, um bot de WhatsApp, etc.).
+
+### Setup adicional
+
+Usa a mesma `ANTHROPIC_API_KEY` e o mesmo `profiles/freelancer_profile.yaml`
+dos módulos anteriores.
+
+### Uso
+
+```bash
+# teste local, uma mensagem por vez
+python -m src.inbox.cli --message-text "Oi, quanto custa um site?"
+
+# com histórico da conversa, para respostas com mais contexto
+python -m src.inbox.cli --message mensagem.txt --thread-history historico.txt
+
+# webhook: POST {"message": "...", "thread_history": "..."} em /webhook
+python -m src.inbox.cli --serve --port 8000
+```
+
+O modo `--serve` sobe um servidor local (Flask) com `GET /health` e
+`POST /webhook`, que responde com JSON (`category`, `priority`,
+`suggested_reply`, `reasoning`) — pronto para conectar a qualquer fonte de
+mensagens que consiga fazer uma chamada HTTP.
+
+### Testes
+
+```bash
+python -m pytest -q
+```
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |
@@ -115,5 +153,5 @@ python -m pytest -q
 | Prospecção (achar sem site) | Fácil | ✅ MVP implementado |
 | Proposta/contrato em PDF | Fácil | ✅ MVP implementado |
 | Análise de call | Médio | ✅ MVP implementado |
-| Inbox + sugestão de resposta | Médio | Planejado |
+| Inbox + sugestão de resposta | Médio | ✅ MVP implementado |
 | Disparo automático WhatsApp | Arriscado (API não-oficial = risco de ban) | Não priorizado |
