@@ -3,51 +3,18 @@
 from __future__ import annotations
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import (
-    Paragraph,
-    SimpleDocTemplate,
-    Spacer,
-    Table,
-    TableStyle,
-)
+from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
+from src.common.pdf_styles import (
+    ACCENT_COLOR,
+    BODY_STYLE,
+    BULLET_STYLE,
+    HEADING_STYLE,
+    TITLE_STYLE,
+    new_document,
+)
 from src.proposals.schema import Contract, Proposal
-
-ACCENT_COLOR = colors.HexColor("#1F3A5F")
-
-_styles = getSampleStyleSheet()
-
-TITLE_STYLE = ParagraphStyle(
-    "DocTitle",
-    parent=_styles["Title"],
-    textColor=ACCENT_COLOR,
-    spaceAfter=6,
-)
-HEADING_STYLE = ParagraphStyle(
-    "SectionHeading",
-    parent=_styles["Heading2"],
-    textColor=ACCENT_COLOR,
-    spaceBefore=14,
-    spaceAfter=6,
-)
-BODY_STYLE = ParagraphStyle("Body", parent=_styles["BodyText"], leading=15)
-BULLET_STYLE = ParagraphStyle(
-    "Bullet", parent=_styles["BodyText"], leftIndent=14, bulletIndent=0, leading=15
-)
-
-
-def _doc(output_path: str) -> SimpleDocTemplate:
-    return SimpleDocTemplate(
-        output_path,
-        pagesize=A4,
-        leftMargin=2.2 * cm,
-        rightMargin=2.2 * cm,
-        topMargin=2 * cm,
-        bottomMargin=2 * cm,
-    )
 
 
 def render_proposal_pdf(proposal: Proposal, output_path: str) -> None:
@@ -94,7 +61,7 @@ def render_proposal_pdf(proposal: Proposal, output_path: str) -> None:
     story.append(Paragraph("Próximos passos", HEADING_STYLE))
     story.append(Paragraph(proposal.closing, BODY_STYLE))
 
-    _doc(output_path).build(story)
+    new_document(output_path).build(story)
 
 
 def render_contract_pdf(contract: Contract, output_path: str) -> None:
@@ -111,4 +78,4 @@ def render_contract_pdf(contract: Contract, output_path: str) -> None:
     story.append(Spacer(1, 24))
     story.append(Paragraph(contract.signature_line, BODY_STYLE))
 
-    _doc(output_path).build(story)
+    new_document(output_path).build(story)

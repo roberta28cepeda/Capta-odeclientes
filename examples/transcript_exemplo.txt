@@ -1,0 +1,15 @@
+Vendedor: Oi João, tudo bem? Obrigado por reservar um tempo hoje.
+Cliente: Oi, tudo bem. Pode falar, tenho uns 15 minutos só.
+Vendedor: Perfeito, vou direto ao ponto então. Vi que vocês não têm site,
+certo? Eu faço sites para pequenos negócios locais.
+Cliente: É, a gente nunca teve. Sempre foi só boca a boca e Instagram mesmo.
+Vendedor: Entendi. E hoje vocês sentem falta disso, tipo, gente que procura
+"padaria perto de mim" no Google e não acha vocês?
+Cliente: Sinceramente nunca parei pra pensar nisso, mas faz sentido.
+Vendedor: Então, eu monto um pacote completo: site com cardápio, localização,
+formulário de contato, tudo por R$ 4.000.
+Cliente: Nossa, achei salgado. A gente é uma padaria pequena, não sei se vale
+esse investimento agora.
+Vendedor: Entendo, mas é um investimento que se paga rápido...
+Cliente: Vou pensar e te retorno, obrigado.
+Vendedor: Combinado, fico no aguardo!

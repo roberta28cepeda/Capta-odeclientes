@@ -71,12 +71,49 @@ apontar para outro arquivo de perfil, e `--output-dir` para mudar o destino.
 python -m pytest -q
 ```
 
+## Módulo: Análise pós-call
+
+Revisa a transcrição de uma call de vendas como um "code review, mas pra
+conversa": dá uma nota, lista os pontos fortes, aponta o **único bug mais
+grave** que provavelmente custou o fechamento, sugere como corrigi-lo, e
+destaca os momentos-chave da conversa. Gera um relatório em PDF.
+
+### Setup adicional
+
+Usa a mesma `ANTHROPIC_API_KEY` do módulo de propostas. Se você já tem a
+transcrição em texto, não precisa de mais nada. Para transcrever áudio
+localmente com Whisper (não envia o áudio para nenhuma API):
+
+```bash
+pip install -r requirements-whisper.txt  # também requer o binário `ffmpeg`
+```
+
+### Uso
+
+```bash
+# a partir de uma transcrição já pronta
+python -m src.call_analysis.cli --transcript examples/transcript_exemplo.txt
+
+# a partir de um áudio (transcreve localmente com Whisper primeiro)
+python -m src.call_analysis.cli --audio call.mp3 --whisper-model base
+```
+
+Gera `output/analise_call.pdf` e imprime a nota e o "bug" principal no
+terminal. Use `--context` para passar um `.txt` com informações adicionais
+(o que estava sendo vendido, preço, etc.) que ajudem a análise.
+
+### Testes
+
+```bash
+python -m pytest -q
+```
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |
 | --- | --- | --- |
 | Prospecção (achar sem site) | Fácil | ✅ MVP implementado |
 | Proposta/contrato em PDF | Fácil | ✅ MVP implementado |
-| Análise de call | Médio | Planejado |
+| Análise de call | Médio | ✅ MVP implementado |
 | Inbox + sugestão de resposta | Médio | Planejado |
 | Disparo automático WhatsApp | Arriscado (API não-oficial = risco de ban) | Não priorizado |
