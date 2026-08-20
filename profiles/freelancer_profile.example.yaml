@@ -1,0 +1,12 @@
+# Copie este arquivo para freelancer_profile.yaml e edite com seus dados.
+freelancer_name: "Seu Nome / Sua Empresa"
+services: "desenvolvimento de sites e sistemas sob medida"
+tone: "profissional, direto, sem juridiquês excessivo"
+pricing_model: "projeto fechado, com valor por escopo"
+payment_terms: "50% de entrada (assinatura do contrato), 50% na entrega"
+standard_clauses:
+  - "até 2 rodadas de ajustes incluídas"
+  - "hospedagem e domínio não inclusos, salvo acordo em contrário"
+jurisdiction: "Comarca de São Paulo, SP"
+contact: "seu-email@exemplo.com"
+language: "português do Brasil"

@@ -1,0 +1,11 @@
+Cliente: Padaria Central
+Contato: João, dono da padaria
+
+O que ele precisa: um site simples para a padaria, com página inicial mostrando
+os produtos (pães, bolos, salgados), uma página de "sobre nós" contando a
+história da padaria (fundada em 1998) e uma página de contato com endereço,
+telefone e um mapa do Google. Ele quer poder atualizar os preços dele mesmo,
+sem depender de programador toda vez.
+
+Prazo desejado: 3 semanas.
+Orçamento mencionado: até R$ 3.000.
