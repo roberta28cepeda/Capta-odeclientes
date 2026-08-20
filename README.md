@@ -146,6 +146,63 @@ mensagens que consiga fazer uma chamada HTTP.
 python -m pytest -q
 ```
 
+## Módulo: WhatsApp via Cloud API oficial (Meta)
+
+Envia e recebe mensagens de WhatsApp usando a **WhatsApp Cloud API oficial**
+da Meta — não a API não-oficial (que arrisca banir o número do cliente).
+Dá pra: mandar um texto, mandar a proposta/contrato em PDF já gerados pelo
+módulo de propostas, e receber mensagens por webhook, reaproveitando o
+mesmo gerador de resposta sugerida do módulo de inbox.
+
+### Como funciona (e as pegadinhas da API oficial)
+
+- **Enviar mensagem de texto livre** só funciona dentro da janela de 24h
+  depois do cliente escrever para você primeiro. Fora dessa janela, a Meta
+  exige um **template de mensagem pré-aprovado** (não implementado aqui —
+  é configurado no painel do WhatsApp Manager e leva alguns dias para
+  aprovação).
+- **Enviar documento (PDF)** segue a mesma regra da janela de 24h.
+- **Receber mensagens** chega por webhook, sem restrição de janela.
+- Por padrão, `--serve` só **sugere** a resposta e imprime no terminal —
+  não envia nada sozinho. Envio automático é opt-in via `--auto-reply` e
+  deve ser usado com cautela (resposta gerada por LLM, sem revisão humana,
+  saindo em nome do freelancer).
+
+### Setup
+
+1. Crie um app no [Meta for Developers](https://developers.facebook.com/apps/)
+   com o produto **WhatsApp** e siga a verificação de negócio.
+2. No painel do app, pegue o `access_token` (temporário para testes,
+   permanente para produção) e o `phone_number_id` do número de teste ou do
+   seu número verificado.
+3. Preencha no `.env`: `WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` e
+   `WHATSAPP_VERIFY_TOKEN` (você escolhe esse valor e configura o mesmo no
+   painel de configuração do webhook).
+4. Para receber mensagens, o webhook precisa de uma URL pública (ex.: um
+   túnel `ngrok` apontando para `--serve` durante o desenvolvimento).
+
+### Uso
+
+```bash
+# enviar texto (só dentro da janela de 24h após o cliente escrever)
+python -m src.whatsapp.cli --to 5511999999999 --send-text "Oi! Tudo bem?"
+
+# enviar a proposta em PDF já gerada
+python -m src.whatsapp.cli --to 5511999999999 --send-pdf output/proposta.pdf --caption "Segue a proposta!"
+
+# subir o webhook que recebe mensagens e sugere resposta (sem enviar sozinho)
+python -m src.whatsapp.cli --serve --port 8080
+
+# mesmo webhook, mas enviando a resposta sugerida automaticamente (cuidado)
+python -m src.whatsapp.cli --serve --auto-reply
+```
+
+### Testes
+
+```bash
+python -m pytest -q
+```
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |
@@ -154,4 +211,4 @@ python -m pytest -q
 | Proposta/contrato em PDF | Fácil | ✅ MVP implementado |
 | Análise de call | Médio | ✅ MVP implementado |
 | Inbox + sugestão de resposta | Médio | ✅ MVP implementado |
-| Disparo automático WhatsApp | Arriscado (API não-oficial = risco de ban) | Não priorizado |
+| WhatsApp via Cloud API oficial | Antes "arriscado" (API não-oficial); via Meta é burocrático mas seguro | ✅ MVP implementado |
