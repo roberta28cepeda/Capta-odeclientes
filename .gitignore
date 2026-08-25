@@ -4,6 +4,7 @@ __pycache__/
 venv/
 .env
 *.csv
+!examples/*.csv
 .pytest_cache/
 output/
 profiles/freelancer_profile.yaml

@@ -36,6 +36,39 @@ Opções:
 - `--max-results`: máximo de resultados a escanear (até 60, limite da Text Search).
 - `--api-key`: sobrescreve `GOOGLE_PLACES_API_KEY` do `.env`.
 
+## Módulo: Prospecção via Lista de Devedores da PGFN
+
+Fonte de lead alternativa, sem depender de API paga: parseia o export CSV
+da **Lista de Devedores da PGFN** (dívida ativa da União) e segmenta as
+empresas por **tier de valor da dívida** — um sinal de dor bem mais forte
+que "não tem site", especialmente pra contadores (regularização fiscal) e
+transportadoras (dívida trava financiamento de frota e licitação).
+
+O export da PGFN não é um CSV limpo: tem um preâmbulo de metadados antes do
+cabeçalho real e vem em ISO-8859-1 (latin-1) — o parser já trata isso.
+
+### Uso
+
+```bash
+python -m src.prospecting.pgfn_cli --csv devedores.csv --output leads_pgfn.csv
+```
+
+Gera um CSV com CNPJ, razão social, nome fantasia, valor da dívida
+selecionada, valor total, tipo de registro (pessoa física/EI vs empresa
+constituída) e **tier** (A ≥R$500 mil, B R$100-500 mil, C R$20-100 mil, D
+<R$20 mil). Imprime também a concentração de Pareto — tipicamente uma
+fração pequena das empresas concentra a maior parte da dívida, priorize
+por aí.
+
+A lista da PGFN **não inclui e-mail nem telefone** — falta enriquecer
+contato antes de abordar (não implementado aqui ainda).
+
+### Testes
+
+```bash
+python -m pytest -q
+```
+
 ## Módulo: Proposta/contrato em PDF
 
 A partir do briefing de um cliente (texto livre), gera automaticamente uma
@@ -208,6 +241,7 @@ python -m pytest -q
 | Módulo | Viabilidade | Status |
 | --- | --- | --- |
 | Prospecção (achar sem site) | Fácil | ✅ MVP implementado |
+| Prospecção via Lista de Devedores PGFN | Fácil | ✅ MVP implementado |
 | Proposta/contrato em PDF | Fácil | ✅ MVP implementado |
 | Análise de call | Médio | ✅ MVP implementado |
 | Inbox + sugestão de resposta | Médio | ✅ MVP implementado |

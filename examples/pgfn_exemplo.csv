@@ -1,0 +1,16 @@
+Lista de Devedores - PGFN
+
+
+Filtros Utilizados:
+"Estado: RJ"
+"Natureza da dívida: Simples Nacional"
+
+
+Data da pesquisa: 24/08/2026 10:43
+
+
+CPF/CNPJ;Nome;Nome Fantasia;Valor Total;Valor da Dívida Selecionada
+"04.117.803/0001-81";"TRIUNFER TRANSPORTES LTDA";"Triunfer";"1.700.000,00";"800.000,00"
+"11.222.333/0001-44";"CONTABIL EXEMPLO LTDA";"";"180.000,00";"150.000,00"
+"55.666.777/0001-88";"POSTO BOA VIAGEM LTDA";"Posto Boa Viagem";"60.000,00";"45.000,00"
+"98765432109";"JOAO DA SILVA 98765432109";"";"15.000,00";"12.000,00"
