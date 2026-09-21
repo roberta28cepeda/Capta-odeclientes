@@ -236,6 +236,68 @@ python -m src.whatsapp.cli --serve --auto-reply
 python -m pytest -q
 ```
 
+## Módulo: Monitoramento Fiscal (estilo Veri)
+
+Produto de carteira: um escritório contábil (tenant) cadastra os CNPJs
+dos seus clientes, importa achados fiscais (pendências, multas,
+notificações Federal/Estadual/Municipal e guias **DAS**), e o sistema
+compara cada importação com a anterior, classifica cada achado como
+**nova** / **recorrente** / **resolvida**, prioriza o que merece alerta
+(todo achado novo, mais DAS não pago perto do vencimento) e disponibiliza
+tudo num dashboard web — inspirado nas funcionalidades da [Veri](https://veri.com.br/),
+mas pensado desde já como produto multi-tenant pra vender a outros
+escritórios, não só uso interno.
+
+### O que este MVP não faz
+
+Não existe API oficial pra consultar pendências/multas ou emitir guia DAS
+em nome de terceiros — a Veri e concorrentes automatizam o **e-CAC/DCTFWeb**
+usando o **certificado digital (A1/A3)** de cada cliente contábil. Isso é
+tecnicamente viável mas juridicamente sensível (acesso a sistemas do
+governo em nome de terceiros, custódia do certificado digital do cliente)
+e não foi implementado aqui — decisão de produto que precisa ser tomada
+com calma, e testada contra o e-CAC real com certificado em mãos.
+
+Por isso os achados fiscais entram via **CSV** (`--import-snapshot`) — de
+um export manual do e-CAC feito pelo próprio escritório, ou de qualquer
+scraper que ele já use. O sistema cuida do diff, priorização, alerta e
+dashboard; a fonte do dado é plugável (`src/fiscal_monitor/providers.py`,
+`FiscalDataProvider`) pra quando a integração real existir.
+
+### Setup adicional
+
+Usa `WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID` do módulo de
+WhatsApp (opcional, só pra `--enviar-whatsapp`). Não precisa de mais nada
+além do `requirements.txt` já instalado — a persistência é SQLite puro
+(stdlib), sem serviço externo.
+
+### Uso
+
+```bash
+# cadastra um escritório (tenant) e sua carteira de CNPJs
+python -m src.fiscal_monitor.cli --import-tenant --nome "Escritório X" --whatsapp 5511999999999
+python -m src.fiscal_monitor.cli --import-portfolio --tenant-id 1 --csv carteira.csv
+
+# importa uma leva de achados fiscais (formato: cnpj,esfera,tipo,descricao,valor,vencimento,pago)
+python -m src.fiscal_monitor.cli --import-snapshot --tenant-id 1 --csv snapshot_ecac.csv
+
+# roda o motor de alertas sobre o último snapshot, opcionalmente gerando PDF e enviando por WhatsApp
+python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5
+python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp
+
+# dashboard web (lista de tenants, carteira e achados em aberto)
+python -m src.fiscal_monitor.cli --serve --port 8090
+```
+
+Veja `examples/fiscal_monitor_carteira_exemplo.csv` e
+`examples/fiscal_monitor_snapshot_exemplo.csv` para o formato esperado.
+
+### Testes
+
+```bash
+python -m pytest -q
+```
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |
@@ -246,3 +308,5 @@ python -m pytest -q
 | Análise de call | Médio | ✅ MVP implementado |
 | Inbox + sugestão de resposta | Médio | ✅ MVP implementado |
 | WhatsApp via Cloud API oficial | Antes "arriscado" (API não-oficial); via Meta é burocrático mas seguro | ✅ MVP implementado |
+| Monitoramento Fiscal (estilo Veri) — via CSV | Médio | ✅ MVP implementado |
+| Monitoramento Fiscal — integração real e-CAC/DCTFWeb via certificado digital | Difícil (jurídico + técnico) | ⏳ Não implementado — ver seção acima |
