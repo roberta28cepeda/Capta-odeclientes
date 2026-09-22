@@ -1,7 +1,8 @@
 import os
 import tempfile
 
-from src.fiscal_monitor.pdf import render_portfolio_report
+from src.fiscal_monitor.pdf import render_pre_analise_pdf, render_portfolio_report
+from src.fiscal_monitor.preanalise import PreAnalise
 from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
 
 TENANT = Tenant(id=1, nome="Escritório A", contato_whatsapp=None, plano=None, criado_em="")
@@ -30,3 +31,33 @@ def test_render_portfolio_report_handles_empty_portfolio():
 
         assert os.path.exists(path)
         assert os.path.getsize(path) > 0
+
+
+PRE_ANALISE = PreAnalise(
+    cnpj="11.222.333/0001-44",
+    razao_social="Contábil Exemplo",
+    nome_fantasia="Contabil",
+    situacao_cadastral="ATIVA",
+    data_situacao_cadastral="2010-01-01",
+    natureza_juridica="Sociedade Empresária Limitada",
+    cnae_principal="Atividades de contabilidade",
+    porte="ME",
+    uf="SP",
+    municipio="SAO PAULO",
+    data_inicio_atividade="2010-01-01",
+    opcao_pelo_simples=True,
+    opcao_pelo_mei=False,
+    capital_social=50000.0,
+    socios=["Fulano de Tal"],
+)
+
+
+def test_render_pre_analise_pdf_creates_nonempty_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "pre_analise.pdf")
+        render_pre_analise_pdf(PRE_ANALISE, ["Nenhum alerta cadastral identificado."], path, escritorio_nome="Escritório X")
+
+        assert os.path.exists(path)
+        assert os.path.getsize(path) > 0
+        with open(path, "rb") as f:
+            assert f.read(4) == b"%PDF"

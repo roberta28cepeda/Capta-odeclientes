@@ -253,6 +253,30 @@ inspirado nas funcionalidades da [Veri](https://veri.com.br/), mas pensado
 desde já como produto multi-tenant pra vender a outros escritórios, não só
 uso interno.
 
+### Pré-análise fiscal pública (sem procuração, sem e-CAC)
+
+Resolve a dor de abordar um cliente que ainda não quer dar procuração ou
+acesso ao e-CAC: com **só o CNPJ**, consulta dados que já são públicos —
+situação cadastral, natureza jurídica, porte, e se a empresa é optante
+pelo **Simples Nacional** ou **MEI** — via [BrasilAPI](https://brasilapi.com.br/),
+um espelho gratuito e sem autenticação dos dados que a Receita Federal já
+publica. Gera um PDF pronto pra levar na reunião, **antes** de pedir
+qualquer acesso. Ao contrário do resto do módulo, isso funciona **hoje**,
+sem depender de certificado digital nem de contrato com ninguém.
+
+```bash
+python -m src.fiscal_monitor.cli --pre-analise --cnpj 11.222.333/0001-44 \
+    --escritorio-nome "Seu Escritório" --logo caminho/da/sua/logo.png
+```
+
+Gera `output/pre_analise_<cnpj>.pdf`. `--logo` é opcional.
+
+**O que isso não traz:** pendências, multas e dívidas fiscais são dado
+privado — exigem procuração eletrônica e acesso ao e-CAC (a parte do
+módulo que só funciona hoje via CSV importado manualmente, ou no futuro
+via Serpro Integra Contador, ver abaixo). A pré-análise é só a porta de
+entrada da conversa, não substitui a checagem completa.
+
 ### O que este MVP não faz (ainda)
 
 A Veri e concorrentes puxam dado ao vivo do e-CAC via **Serpro Integra
@@ -325,5 +349,6 @@ python -m pytest -q
 | Análise de call | Médio | ✅ MVP implementado |
 | Inbox + sugestão de resposta | Médio | ✅ MVP implementado |
 | WhatsApp via Cloud API oficial | Antes "arriscado" (API não-oficial); via Meta é burocrático mas seguro | ✅ MVP implementado |
+| Monitoramento Fiscal — pré-análise pública (só CNPJ, sem procuração) | Fácil | ✅ MVP implementado |
 | Monitoramento Fiscal (estilo Veri) — via CSV, com CND/parcelamento/sublimite Simples | Médio | ✅ MVP implementado |
 | Monitoramento Fiscal — integração real via Serpro Integra Contador (canal oficial Receita Federal) | Difícil (contrato Serpro + certificado digital) | ⏳ Terreno preparado (`SerproIntegraContadorProvider`), não ativado — ver seção acima |

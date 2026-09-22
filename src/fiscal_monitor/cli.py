@@ -13,6 +13,9 @@ Uso:
     python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5
     python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp
     python -m src.fiscal_monitor.cli --serve --port 8090
+
+    # pré-análise pública (só CNPJ, sem procuração/e-CAC) — ferramenta de pré-venda
+    python -m src.fiscal_monitor.cli --pre-analise --cnpj 11.222.333/0001-44 --escritorio-nome "Escritório X"
 """
 
 from __future__ import annotations
@@ -42,6 +45,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     mode.add_argument("--check", action="store_true", help="Roda o motor de alertas sobre o último snapshot")
     mode.add_argument("--serve", action="store_true", help="Sobe o dashboard web")
+    mode.add_argument(
+        "--pre-analise",
+        action="store_true",
+        help="Gera uma pré-análise fiscal pública (só CNPJ, sem procuração/e-CAC) — ferramenta de pré-venda",
+    )
 
     parser.add_argument("--db-path", default=storage.DEFAULT_DB_PATH, help="Caminho do banco sqlite")
     parser.add_argument("--tenant-id", type=int, help="ID do tenant (obrigatório exceto em --import-tenant)")
@@ -69,6 +77,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--host", default="127.0.0.1", help="Host do dashboard (--serve)")
     parser.add_argument("--port", type=int, default=8090, help="Porta do dashboard (--serve)")
+
+    parser.add_argument("--cnpj", help="CNPJ a consultar, para --pre-analise")
+    parser.add_argument("--logo", help="Caminho de uma imagem pra estampar no PDF da pré-análise, opcional")
+    parser.add_argument("--escritorio-nome", help="Nome do escritório, estampado no PDF da pré-análise")
     return parser.parse_args(argv)
 
 
@@ -249,6 +261,39 @@ def main(argv: list[str] | None = None) -> int:
         app = create_app(db_path=args.db_path)
         print(f"Dashboard em http://{args.host}:{args.port}/tenants — Ctrl+C para parar")
         app.run(host=args.host, port=args.port)
+        return 0
+
+    if args.pre_analise:
+        if not _require(args.cnpj, "--cnpj"):
+            return 1
+
+        from src.fiscal_monitor.pdf import render_pre_analise_pdf
+        from src.fiscal_monitor.preanalise import (
+            ConsultaCnpjError,
+            gerar_alertas,
+            montar_pre_analise,
+            only_digits,
+        )
+        from src.fiscal_monitor.preanalise import consultar_cnpj_publico as _consultar_cnpj_publico
+
+        try:
+            dados = _consultar_cnpj_publico(args.cnpj)
+        except ConsultaCnpjError as exc:
+            print(f"Erro: {exc}", file=sys.stderr)
+            return 1
+
+        analise = montar_pre_analise(dados)
+        alertas = gerar_alertas(analise)
+        print(f"Pré-análise: {analise.razao_social} ({analise.cnpj})")
+        for alerta in alertas:
+            print(f"- {alerta}")
+
+        os.makedirs(args.output_dir, exist_ok=True)
+        pdf_path = os.path.join(args.output_dir, f"pre_analise_{only_digits(args.cnpj)}.pdf")
+        render_pre_analise_pdf(
+            analise, alertas, pdf_path, escritorio_nome=args.escritorio_nome, logo_path=args.logo
+        )
+        print(f"PDF salvo em {pdf_path}")
         return 0
 
     return 1

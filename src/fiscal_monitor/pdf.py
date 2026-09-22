@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from reportlab.lib import colors
 from reportlab.lib.units import cm
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Image, Paragraph, Spacer, Table, TableStyle
 
-from src.common.pdf_styles import ACCENT_COLOR, ALERT_HEADING_STYLE, BODY_STYLE, HEADING_STYLE, TITLE_STYLE, new_document
+from src.common.pdf_styles import (
+    ACCENT_COLOR,
+    ALERT_HEADING_STYLE,
+    BODY_STYLE,
+    BULLET_STYLE,
+    HEADING_STYLE,
+    TITLE_STYLE,
+    new_document,
+)
+from src.fiscal_monitor.preanalise import PreAnalise
 from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
 
 _TABLE_COLS = [2.2 * cm, 2 * cm, 6 * cm, 2.5 * cm, 2.5 * cm, 2.3 * cm]
@@ -62,5 +71,59 @@ def render_portfolio_report(
         )
         story.append(table)
         story.append(Spacer(1, 10))
+
+    new_document(output_path).build(story)
+
+
+def render_pre_analise_pdf(
+    analise: PreAnalise,
+    alertas: list[str],
+    output_path: str,
+    escritorio_nome: str | None = None,
+    logo_path: str | None = None,
+) -> None:
+    story = []
+    if logo_path:
+        story.append(Image(logo_path, width=3 * cm, height=3 * cm, kind="proportional"))
+        story.append(Spacer(1, 8))
+
+    story.append(Paragraph("Pré-Análise Fiscal", TITLE_STYLE))
+    if escritorio_nome:
+        story.append(Paragraph(f"Preparado por {escritorio_nome}", BODY_STYLE))
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph(f"{analise.razao_social} ({analise.cnpj})", HEADING_STYLE))
+    if analise.nome_fantasia:
+        story.append(Paragraph(f"Nome fantasia: {analise.nome_fantasia}", BODY_STYLE))
+    story.append(Paragraph(f"Situação cadastral: {analise.situacao_cadastral or '-'}", BODY_STYLE))
+    story.append(Paragraph(f"Natureza jurídica: {analise.natureza_juridica or '-'}", BODY_STYLE))
+    story.append(Paragraph(f"CNAE principal: {analise.cnae_principal or '-'}", BODY_STYLE))
+    story.append(Paragraph(f"Porte: {analise.porte or '-'}", BODY_STYLE))
+    story.append(Paragraph(f"Município/UF: {analise.municipio or '-'}/{analise.uf or '-'}", BODY_STYLE))
+    story.append(Paragraph(f"Início de atividade: {analise.data_inicio_atividade or '-'}", BODY_STYLE))
+
+    def _sim_nao(valor: bool | None) -> str:
+        if valor is None:
+            return "não informado"
+        return "sim" if valor else "não"
+
+    story.append(Paragraph(f"Optante pelo Simples Nacional: {_sim_nao(analise.opcao_pelo_simples)}", BODY_STYLE))
+    story.append(Paragraph(f"Optante pelo MEI: {_sim_nao(analise.opcao_pelo_mei)}", BODY_STYLE))
+    if analise.socios:
+        story.append(Paragraph(f"Sócios: {', '.join(analise.socios)}", BODY_STYLE))
+
+    story.append(Paragraph("Alertas da pré-análise", ALERT_HEADING_STYLE))
+    for alerta in alertas:
+        story.append(Paragraph(f"• {alerta}", BULLET_STYLE))
+
+    story.append(Spacer(1, 16))
+    story.append(
+        Paragraph(
+            "Esta pré-análise usa apenas dados públicos (situação cadastral e "
+            "enquadramento tributário). Pendências, multas e débitos fiscais exigem "
+            "procuração eletrônica e acesso ao e-CAC para uma verificação completa.",
+            BODY_STYLE,
+        )
+    )
 
     new_document(output_path).build(story)
