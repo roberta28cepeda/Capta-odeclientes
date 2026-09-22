@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock
 
 import pytest
+import requests
 
 from src.fiscal_monitor.preanalise import (
     ConsultaCnpjError,
@@ -8,6 +9,7 @@ from src.fiscal_monitor.preanalise import (
     gerar_alertas,
     montar_pre_analise,
     only_digits,
+    validar_cnpj,
 )
 
 SAMPLE_RESPONSE = {
@@ -40,6 +42,21 @@ def test_only_digits_strips_punctuation():
     assert only_digits("11.222.333/0001-44") == "11222333000144"
 
 
+@pytest.mark.parametrize(
+    "cnpj,esperado",
+    [
+        ("33.000.167/0001-01", True),  # Petrobras — CNPJ público real, dígitos válidos
+        ("11.222.333/0001-81", True),
+        ("11.111.111/1111-11", False),  # todos os dígitos iguais
+        ("11.222.333/0001-99", False),  # dígito verificador errado
+        ("00.000.000/0000-00", False),
+        ("123", False),  # tamanho errado
+    ],
+)
+def test_validar_cnpj(cnpj, esperado):
+    assert validar_cnpj(cnpj) is esperado
+
+
 def test_consultar_cnpj_publico_returns_json():
     session = MagicMock()
     session.get.return_value = _mock_response(200, SAMPLE_RESPONSE)
@@ -57,6 +74,14 @@ def test_consultar_cnpj_publico_raises_on_404():
 
     with pytest.raises(ConsultaCnpjError, match="não encontrado"):
         consultar_cnpj_publico("00.000.000/0000-00", session=session)
+
+
+def test_consultar_cnpj_publico_raises_on_connection_error():
+    session = MagicMock()
+    session.get.side_effect = requests.exceptions.ConnectionError("sem rede")
+
+    with pytest.raises(ConsultaCnpjError, match="Falha de conexão"):
+        consultar_cnpj_publico("11.222.333/0001-44", session=session)
 
 
 def test_consultar_cnpj_publico_raises_on_server_error():

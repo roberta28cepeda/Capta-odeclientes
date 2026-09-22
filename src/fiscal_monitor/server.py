@@ -1,20 +1,33 @@
-"""Dashboard somente-leitura: lista escritórios (tenants), a carteira de
-CNPJs de cada um e os achados fiscais em aberto.
+"""Dashboard: lista escritórios (tenants), a carteira de CNPJs de cada um,
+os achados fiscais em aberto, e o formulário de pré-análise pública
+(só CNPJ, sem procuração/e-CAC).
 """
 
 from __future__ import annotations
 
+import os
 import sqlite3
+import tempfile
 from datetime import date
 
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, after_this_request, jsonify, render_template_string, request, send_file
 
 from src.fiscal_monitor import monitor, storage
+from src.fiscal_monitor.pdf import render_pre_analise_pdf
+from src.fiscal_monitor.preanalise import (
+    ConsultaCnpjError,
+    consultar_cnpj_publico,
+    gerar_alertas,
+    montar_pre_analise,
+    only_digits,
+    validar_cnpj,
+)
 
 _TENANTS_TEMPLATE = """
 <!doctype html>
 <title>Monitoramento Fiscal</title>
 <h1>Escritórios monitorados</h1>
+<p><a href="/pre-analise">Gerar pré-análise pública (só CNPJ, sem procuração) &rarr;</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
 {% for tenant, count in tenants %}
@@ -97,6 +110,20 @@ _CNPJ_HISTORY_TEMPLATE = """
 {% if not historico %}<p>Nenhum snapshot importado ainda para este CNPJ.</p>{% endif %}
 """
 
+_PRE_ANALISE_FORM_TEMPLATE = """
+<!doctype html>
+<title>Pré-Análise Fiscal</title>
+<h1>Pré-Análise Fiscal</h1>
+<p>Só o CNPJ — sem procuração, sem acesso ao e-CAC. Gera um PDF pra levar na reunião.</p>
+{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
+<form method="post" enctype="multipart/form-data">
+  <p><label>CNPJ<br><input type="text" name="cnpj" required placeholder="00.000.000/0000-00" value="{{ cnpj or '' }}"></label></p>
+  <p><label>Nome do escritório (opcional)<br><input type="text" name="escritorio_nome" value="{{ escritorio_nome or '' }}"></label></p>
+  <p><label>Logo (opcional)<br><input type="file" name="logo" accept="image/*"></label></p>
+  <button type="submit">Gerar pré-análise (PDF)</button>
+</form>
+"""
+
 
 def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
     app = Flask(__name__)
@@ -107,6 +134,62 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
     @app.get("/health")
     def health():
         return jsonify({"status": "ok"})
+
+    @app.route("/pre-analise", methods=["GET", "POST"])
+    def pre_analise():
+        if request.method == "GET":
+            return render_template_string(_PRE_ANALISE_FORM_TEMPLATE)
+
+        cnpj = (request.form.get("cnpj") or "").strip()
+        escritorio_nome = (request.form.get("escritorio_nome") or "").strip() or None
+
+        if not validar_cnpj(cnpj):
+            return (
+                render_template_string(
+                    _PRE_ANALISE_FORM_TEMPLATE,
+                    erro="CNPJ inválido — confira os dígitos.",
+                    cnpj=cnpj,
+                    escritorio_nome=escritorio_nome,
+                ),
+                400,
+            )
+
+        logo_path = None
+        logo_file = request.files.get("logo")
+        if logo_file and logo_file.filename:
+            fd, logo_path = tempfile.mkstemp(suffix=os.path.splitext(logo_file.filename)[1] or ".png")
+            os.close(fd)
+            logo_file.save(logo_path)
+
+        try:
+            dados = consultar_cnpj_publico(cnpj)
+        except ConsultaCnpjError as exc:
+            if logo_path and os.path.exists(logo_path):
+                os.remove(logo_path)
+            return (
+                render_template_string(
+                    _PRE_ANALISE_FORM_TEMPLATE, erro=str(exc), cnpj=cnpj, escritorio_nome=escritorio_nome
+                ),
+                400,
+            )
+
+        analise = montar_pre_analise(dados)
+        alertas = gerar_alertas(analise)
+
+        fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        render_pre_analise_pdf(analise, alertas, pdf_path, escritorio_nome=escritorio_nome, logo_path=logo_path)
+
+        @after_this_request
+        def _cleanup(response):
+            for path in (pdf_path, logo_path):
+                if path and os.path.exists(path):
+                    os.remove(path)
+            return response
+
+        return send_file(
+            pdf_path, as_attachment=True, download_name=f"pre_analise_{only_digits(cnpj)}.pdf", mimetype="application/pdf"
+        )
 
     @app.get("/tenants")
     def tenants_list():

@@ -271,6 +271,12 @@ python -m src.fiscal_monitor.cli --pre-analise --cnpj 11.222.333/0001-44 \
 
 Gera `output/pre_analise_<cnpj>.pdf`. `--logo` é opcional.
 
+**Também dá pra gerar direto pelo navegador**, sem terminal — útil pra usar
+na hora, numa reunião: suba o dashboard (`--serve`) e acesse
+`/pre-analise`. É um formulário (CNPJ, nome do escritório opcional, logo
+opcional) que baixa o PDF na hora, com validação de dígito verificador do
+CNPJ antes de consultar.
+
 **O que isso não traz:** pendências, multas e dívidas fiscais são dado
 privado — exigem procuração eletrônica e acesso ao e-CAC (a parte do
 módulo que só funciona hoje via CSV importado manualmente, ou no futuro

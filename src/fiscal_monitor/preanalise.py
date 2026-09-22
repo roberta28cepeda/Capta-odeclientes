@@ -49,11 +49,34 @@ def only_digits(cnpj: str) -> str:
     return "".join(c for c in cnpj if c.isdigit())
 
 
+def validar_cnpj(cnpj: str) -> bool:
+    """Valida o CNPJ pelo algoritmo padrão de dígito verificador (módulo 11)."""
+    digits = only_digits(cnpj)
+    if len(digits) != 14 or digits == digits[0] * 14:
+        return False
+
+    def _calcular_digito(base: str, pesos: list[int]) -> int:
+        total = sum(int(d) * peso for d, peso in zip(base, pesos))
+        resto = total % 11
+        return 0 if resto < 2 else 11 - resto
+
+    pesos1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    pesos2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+
+    digito1 = _calcular_digito(digits[:12], pesos1)
+    digito2 = _calcular_digito(digits[:12] + str(digito1), pesos2)
+
+    return digits[-2:] == f"{digito1}{digito2}"
+
+
 def consultar_cnpj_publico(cnpj: str, session: requests.Session | None = None) -> dict:
     """Consulta os dados cadastrais públicos de um CNPJ na BrasilAPI."""
     session = session or requests.Session()
     url = BRASILAPI_URL.format(cnpj=only_digits(cnpj))
-    response = session.get(url, timeout=10)
+    try:
+        response = session.get(url, timeout=10)
+    except requests.exceptions.RequestException as exc:
+        raise ConsultaCnpjError(f"Falha de conexão ao consultar CNPJ {cnpj}: {exc}") from exc
     if response.status_code == 404:
         raise ConsultaCnpjError(f"CNPJ {cnpj} não encontrado.")
     if response.status_code >= 400:

@@ -273,8 +273,13 @@ def main(argv: list[str] | None = None) -> int:
             gerar_alertas,
             montar_pre_analise,
             only_digits,
+            validar_cnpj,
         )
         from src.fiscal_monitor.preanalise import consultar_cnpj_publico as _consultar_cnpj_publico
+
+        if not validar_cnpj(args.cnpj):
+            print(f"CNPJ inválido: {args.cnpj} — confira os dígitos.", file=sys.stderr)
+            return 1
 
         try:
             dados = _consultar_cnpj_publico(args.cnpj)
