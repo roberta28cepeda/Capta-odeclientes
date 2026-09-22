@@ -21,7 +21,11 @@ from dataclasses import dataclass
 from typing import Protocol
 
 ESFERAS = {"federal", "estadual", "municipal"}
-TIPOS = {"pendencia", "multa", "notificacao", "das"}
+TIPOS = {"pendencia", "multa", "notificacao", "das", "cnd", "parcelamento", "caixa_postal"}
+
+# Para "cnd" e "parcelamento", o campo `vencimento` do RawFinding é a data de
+# validade (CND) ou de vencimento da próxima parcela — mesmo campo, semântica
+# um pouco diferente por tipo. Ver monitor.py para a lógica de alerta de cada um.
 
 
 @dataclass
@@ -94,3 +98,37 @@ class ManualFiscalProvider:
                     )
                 )
         return result
+
+
+class SerproIntegraContadorProvider:
+    """Ponto de extensão pra integração real — não implementado.
+
+    A Veri e concorrentes puxam dado ao vivo do e-CAC via **Serpro Integra
+    Contador**, o canal oficial homologado pela Receita Federal (não é
+    scraping). Pra ativar isso de verdade falta:
+
+    1. Contrato de consumo com o Serpro (é pago por chamada de API).
+    2. Procuração eletrônica assinada pelo cliente contábil, autorizando o
+       escritório a consultar os dados fiscais dele via essa API.
+    3. Certificado digital (e-CNPJ) do escritório, usado pra autenticar as
+       chamadas.
+
+    Sem essas três coisas em mãos não dá pra implementar `fetch()` de forma
+    testável — por isso ele levanta `NotImplementedError`. Use
+    `ManualFiscalProvider` enquanto isso. Ver README.md.
+    """
+
+    name = "serpro_integra_contador"
+
+    def __init__(self, *, consumer_key: str, consumer_secret: str, certificado_path: str):
+        self.consumer_key = consumer_key
+        self.consumer_secret = consumer_secret
+        self.certificado_path = certificado_path
+
+    def fetch(self, cnpjs: list[str] | None = None) -> dict[str, list[RawFinding]]:
+        raise NotImplementedError(
+            "Integração Serpro Integra Contador ainda não implementada — requer "
+            "contrato de consumo com o Serpro, procuração eletrônica do cliente "
+            "e certificado digital do escritório. Use ManualFiscalProvider "
+            "enquanto isso. Ver README.md."
+        )

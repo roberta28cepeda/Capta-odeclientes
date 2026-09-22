@@ -3,12 +3,15 @@ import tempfile
 
 import pytest
 
-from src.fiscal_monitor.providers import ManualFiscalProvider
+from src.fiscal_monitor.providers import ManualFiscalProvider, SerproIntegraContadorProvider
 
 VALID_CSV = """cnpj,esfera,tipo,descricao,valor,vencimento,pago
 11.222.333/0001-44,federal,das,DAS competência 08/2026,412.50,2026-09-25,false
 55.666.777/0001-88,estadual,multa,Multa por atraso na GIA,1850.00,,false
 55.666.777/0001-88,federal,pendencia,Pendência de regularização,,,true
+11.222.333/0001-44,federal,cnd,CND Receita Federal,,2026-09-24,false
+55.666.777/0001-88,federal,parcelamento,Parcela 4/60 PGFN,620.00,2026-09-30,false
+55.666.777/0001-88,federal,caixa_postal,Intimação eletrônica,,,false
 """
 
 INVALID_ESFERA_CSV = """cnpj,esfera,tipo,descricao,valor,vencimento,pago
@@ -44,6 +47,25 @@ def test_fetch_parses_all_rows_grouped_by_cnpj():
     assert pendencia.valor is None
     assert pendencia.vencimento is None
     assert pendencia.pago is True
+
+    cnd = result["11.222.333/0001-44"][1]
+    assert cnd.tipo == "cnd"
+    assert cnd.vencimento == "2026-09-24"
+
+    parcelamento = result["55.666.777/0001-88"][2]
+    assert parcelamento.tipo == "parcelamento"
+    assert parcelamento.valor == 620.0
+
+    caixa_postal = result["55.666.777/0001-88"][3]
+    assert caixa_postal.tipo == "caixa_postal"
+
+
+def test_serpro_provider_raises_not_implemented():
+    provider = SerproIntegraContadorProvider(
+        consumer_key="key", consumer_secret="secret", certificado_path="/tmp/cert.pfx"
+    )
+    with pytest.raises(NotImplementedError, match="Serpro"):
+        provider.fetch()
 
 
 def test_fetch_filters_by_cnpjs_when_given():

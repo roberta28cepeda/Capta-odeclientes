@@ -5,10 +5,11 @@ CNPJs de cada um e os achados fiscais em aberto.
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
-from src.fiscal_monitor import storage
+from src.fiscal_monitor import monitor, storage
 
 _TENANTS_TEMPLATE = """
 <!doctype html>
@@ -30,7 +31,36 @@ _TENANT_DETAIL_TEMPLATE = """
 <!doctype html>
 <title>{{ tenant.nome }}</title>
 <h1>{{ tenant.nome }}</h1>
-<p>Achados em aberto (nova/recorrente):</p>
+
+<h2>Carteira</h2>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>CNPJ</th><th>Razão social</th><th>Regime</th><th></th></tr>
+{% for cnpj in cnpjs %}
+<tr>
+  <td>{{ cnpj.cnpj }}</td>
+  <td>{{ cnpj.razao_social or "-" }}</td>
+  <td>{{ cnpj.regime_tributario or "-" }}</td>
+  <td><a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/historico">histórico</a></td>
+</tr>
+{% endfor %}
+</table>
+
+{% if sublimite_alerts %}
+<h2>Alertas de sublimite do Simples Nacional</h2>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>CNPJ</th><th>Razão social</th><th>Faturamento 12m</th><th>Situação</th></tr>
+{% for item in sublimite_alerts %}
+<tr>
+  <td>{{ item.cnpj.cnpj }}</td>
+  <td>{{ item.cnpj.razao_social or "-" }}</td>
+  <td>R$ {{ "%.2f"|format(item.faturamento_12m) }}</td>
+  <td>{{ item.label }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
+
+<h2>Achados em aberto (nova/recorrente)</h2>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>CNPJ</th><th>Razão social</th><th>Esfera</th><th>Tipo</th><th>Descrição</th><th>Status</th></tr>
 {% for cnpj, finding in findings %}
@@ -45,6 +75,26 @@ _TENANT_DETAIL_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not findings %}<p>Nenhum achado em aberto.</p>{% endif %}
+"""
+
+_CNPJ_HISTORY_TEMPLATE = """
+<!doctype html>
+<title>Histórico — {{ cnpj.cnpj }}</title>
+<h1>Histórico — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+<p><a href="/tenants/{{ cnpj.tenant_id }}">&larr; voltar pro escritório</a></p>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Verificado em</th><th>Esfera</th><th>Tipo</th><th>Descrição</th><th>Status</th></tr>
+{% for verificado_em, provider, finding in historico %}
+<tr>
+  <td>{{ verificado_em }}</td>
+  <td>{{ finding.esfera }}</td>
+  <td>{{ finding.tipo }}</td>
+  <td>{{ finding.descricao }}</td>
+  <td>{{ finding.status }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if not historico %}<p>Nenhum snapshot importado ainda para este CNPJ.</p>{% endif %}
 """
 
 
@@ -73,9 +123,29 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
         if tenant is None:
             conn.close()
             return jsonify({"error": "tenant não encontrado"}), 404
+        cnpjs = storage.list_cnpjs(conn, tenant_id)
         findings = _flatten_open_findings(storage.findings_by_cnpj_for_tenant(conn, tenant_id))
+        referencia = request.args.get("referencia") or date.today().strftime("%Y-%m")
+        sublimite_alerts = monitor.check_sublimite_simples(conn, tenant_id, referencia)
         conn.close()
-        return render_template_string(_TENANT_DETAIL_TEMPLATE, tenant=tenant, findings=findings)
+        return render_template_string(
+            _TENANT_DETAIL_TEMPLATE,
+            tenant=tenant,
+            cnpjs=cnpjs,
+            findings=findings,
+            sublimite_alerts=sublimite_alerts,
+        )
+
+    @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/historico")
+    def cnpj_history(tenant_id: int, cnpj_id: int):
+        conn = _connect()
+        cnpj = storage.get_cnpj(conn, cnpj_id)
+        if cnpj is None or cnpj.tenant_id != tenant_id:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        historico = storage.all_findings_for_cnpj(conn, cnpj_id)
+        conn.close()
+        return render_template_string(_CNPJ_HISTORY_TEMPLATE, cnpj=cnpj, historico=historico)
 
     @app.get("/tenants/<int:tenant_id>/findings.json")
     def tenant_findings_json(tenant_id: int):

@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from src.fiscal_monitor import monitor, storage
 from src.fiscal_monitor.providers import RawFinding
 
@@ -80,6 +82,72 @@ def test_findings_needing_alert_flags_nova_and_das_proximo_do_vencimento():
 
     motivos = {(a.finding.descricao, a.motivo) for a in alerts}
     assert motivos == {("Multa nova", "novo_achado"), ("DAS 08/2026", "das_vencendo")}
+
+
+def test_findings_needing_alert_flags_cnd_vencendo_regardless_of_pago():
+    cnpj = storage.Cnpj(id=1, tenant_id=1, cnpj="11.222.333/0001-44", razao_social=None, nome_fantasia=None, ativo=True)
+    findings = [
+        storage.Finding(1, 1, "federal", "cnd", "CND Federal", None, "2026-09-24", False, monitor.STATUS_RECORRENTE),
+    ]
+
+    alerts = monitor.findings_needing_alert(cnpj, findings, dias_alerta=5, today=date(2026, 9, 20))
+
+    assert len(alerts) == 1
+    assert alerts[0].motivo == "cnd_vencendo"
+
+
+def test_findings_needing_alert_flags_parcelamento_vencendo_when_nao_pago():
+    cnpj = storage.Cnpj(id=1, tenant_id=1, cnpj="11.222.333/0001-44", razao_social=None, nome_fantasia=None, ativo=True)
+    findings = [
+        storage.Finding(1, 1, "federal", "parcelamento", "Parcela 4/60", 620.0, "2026-09-30", False, monitor.STATUS_RECORRENTE),
+        storage.Finding(2, 1, "federal", "parcelamento", "Parcela paga", 620.0, "2026-09-30", True, monitor.STATUS_RECORRENTE),
+    ]
+
+    alerts = monitor.findings_needing_alert(cnpj, findings, dias_alerta=15, today=date(2026, 9, 20))
+
+    assert len(alerts) == 1
+    assert alerts[0].finding.descricao == "Parcela 4/60"
+    assert alerts[0].motivo == "parcelamento_vencendo"
+
+
+def test_findings_needing_alert_ignores_caixa_postal_when_recorrente():
+    cnpj = storage.Cnpj(id=1, tenant_id=1, cnpj="11.222.333/0001-44", razao_social=None, nome_fantasia=None, ativo=True)
+    findings = [
+        storage.Finding(1, 1, "federal", "caixa_postal", "Mensagem antiga", None, None, False, monitor.STATUS_RECORRENTE),
+    ]
+
+    assert monitor.findings_needing_alert(cnpj, findings, today=date(2026, 9, 20)) == []
+
+
+@pytest.mark.parametrize(
+    "faturamento,expected_label",
+    [
+        (2_000_000.0, None),
+        (2_900_000.0, "proximo_sublimite"),
+        (3_700_000.0, "sublimite_estourado"),
+        (3_900_000.0, "proximo_teto"),
+        (4_900_000.0, "teto_estourado"),
+    ],
+)
+def test_sublimite_label_thresholds(faturamento, expected_label):
+    assert monitor._sublimite_label(faturamento) == expected_label
+
+
+def test_check_sublimite_simples_only_considers_regime_simples():
+    conn = storage.connect(":memory:")
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj_simples = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44", regime_tributario="simples")
+    cnpj_presumido = storage.upsert_cnpj(conn, tenant.id, "55.666.777/0001-88", regime_tributario="presumido")
+
+    for cnpj in (cnpj_simples, cnpj_presumido):
+        for mes in range(1, 13):
+            storage.record_faturamento(conn, cnpj.id, f"2026-{mes:02d}", 310_000.0)
+
+    alerts = monitor.check_sublimite_simples(conn, tenant.id, "2026-12")
+
+    assert len(alerts) == 1
+    assert alerts[0].cnpj.cnpj == "11.222.333/0001-44"
+    assert alerts[0].label == "sublimite_estourado"
 
 
 def test_check_tenant_uses_latest_snapshot_per_cnpj():

@@ -65,3 +65,54 @@ def test_tenant_findings_json_returns_open_findings(app):
 def test_tenant_findings_json_returns_404_for_missing_tenant(app):
     response = app.test_client().get("/tenants/999/findings.json")
     assert response.status_code == 404
+
+
+def test_tenant_detail_shows_portfolio_and_regime(app):
+    tenant_id = app.config["_tenant_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}")
+    assert response.status_code == 200
+    assert "11.222.333/0001-44".encode() in response.data
+
+
+def test_cnpj_history_returns_all_snapshots(db_path):
+    conn = storage.connect(db_path)
+    tenant = storage.create_tenant(conn, "Escritório B")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "22.333.444/0001-55")
+    snap1 = storage.create_snapshot(conn, cnpj.id, "manual_csv")
+    storage.add_finding(conn, snap1, "federal", "multa", "Multa X", 100.0, None, False, "nova")
+    snap2 = storage.create_snapshot(conn, cnpj.id, "manual_csv")
+    storage.add_finding(conn, snap2, "federal", "multa", "Multa X", None, None, False, "resolvida")
+    conn.close()
+
+    application = create_app(db_path=db_path)
+    response = application.test_client().get(f"/tenants/{tenant.id}/cnpjs/{cnpj.id}/historico")
+
+    assert response.status_code == 200
+    assert b"Multa X" in response.data
+
+
+def test_tenant_detail_shows_sublimite_alert_for_simples_cnpj(db_path):
+    conn = storage.connect(db_path)
+    tenant = storage.create_tenant(conn, "Escritório C")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "33.444.555/0001-66", regime_tributario="simples")
+    for mes in range(1, 13):
+        storage.record_faturamento(conn, cnpj.id, f"2026-{mes:02d}", 310_000.0)
+    conn.close()
+
+    application = create_app(db_path=db_path)
+    response = application.test_client().get(f"/tenants/{tenant.id}", query_string={"referencia": "2026-12"})
+
+    assert response.status_code == 200
+    assert b"sublimite_estourado" in response.data
+
+
+def test_cnpj_history_returns_404_for_cnpj_of_another_tenant(app, db_path):
+    conn = storage.connect(db_path)
+    outro_tenant = storage.create_tenant(conn, "Escritório B")
+    outro_cnpj = storage.upsert_cnpj(conn, outro_tenant.id, "22.333.444/0001-55")
+    conn.close()
+
+    tenant_id = app.config["_tenant_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{outro_cnpj.id}/historico")
+
+    assert response.status_code == 404

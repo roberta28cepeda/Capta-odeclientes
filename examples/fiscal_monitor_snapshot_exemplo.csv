@@ -1,4 +1,7 @@
 cnpj,esfera,tipo,descricao,valor,vencimento,pago
 11.222.333/0001-44,federal,das,DAS competência 08/2026,412.50,2026-09-25,false
+11.222.333/0001-44,federal,cnd,CND Receita Federal,,2026-09-24,false
 55.666.777/0001-88,estadual,multa,Multa por atraso na entrega da GIA,1850.00,,false
 55.666.777/0001-88,federal,pendencia,Pendência de regularização no CNPJ,,,false
+55.666.777/0001-88,federal,parcelamento,Parcela 4/60 do parcelamento PGFN,620.00,2026-09-30,false
+55.666.777/0001-88,federal,caixa_postal,Mensagem: intimação eletrônica recebida,,,false

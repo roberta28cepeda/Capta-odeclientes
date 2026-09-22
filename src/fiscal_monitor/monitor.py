@@ -18,12 +18,37 @@ STATUS_RESOLVIDA = "resolvida"
 
 DEFAULT_DIAS_ALERTA = 5
 
+# Tipos cujo `vencimento` representa uma data de urgência (vencimento de DAS/
+# parcela, ou validade de CND) — mesmo campo, o motivo do alerta muda por tipo.
+TIPOS_COM_VENCIMENTO = {"das", "cnd", "parcelamento"}
+
+MOTIVOS_VENCIMENTO = {
+    "das": "das_vencendo",
+    "cnd": "cnd_vencendo",
+    "parcelamento": "parcelamento_vencendo",
+}
+
+# Sublimite do Simples Nacional: acima disso a empresa perde o benefício de
+# recolher ICMS/ISS dentro do DAS (passa a apurar por fora). Teto: acima
+# disso a empresa é excluída do regime no ano seguinte. Valores vigentes em
+# 2026 — revisar se a legislação mudar.
+SUBLIMITE_SIMPLES = 3_600_000.0
+TETO_SIMPLES = 4_800_000.0
+ALERTA_PROXIMIDADE_PCT = 0.8
+
 
 @dataclass
 class AlertItem:
     cnpj: storage.Cnpj
     finding: storage.Finding
-    motivo: str  # "novo_achado" ou "das_vencendo"
+    motivo: str  # "novo_achado", "das_vencendo", "cnd_vencendo" ou "parcelamento_vencendo"
+
+
+@dataclass
+class SublimiteAlertItem:
+    cnpj: storage.Cnpj
+    faturamento_12m: float
+    label: str  # "proximo_sublimite" / "sublimite_estourado" / "proximo_teto" / "teto_estourado"
 
 
 def _finding_key(finding) -> tuple[str, str, str]:
@@ -114,10 +139,15 @@ def findings_needing_alert(
         if finding.status == STATUS_NOVA:
             alerts.append(AlertItem(cnpj=cnpj, finding=finding, motivo="novo_achado"))
             continue
-        if finding.tipo == "das" and not finding.pago:
-            dias = days_until(finding.vencimento, today=today)
-            if dias is not None and dias <= dias_alerta:
-                alerts.append(AlertItem(cnpj=cnpj, finding=finding, motivo="das_vencendo"))
+        if finding.tipo not in TIPOS_COM_VENCIMENTO:
+            continue
+        # "pago" não faz sentido pra CND (não é algo que se paga) — só DAS e
+        # parcelamento pulam o alerta quando já quitados.
+        if finding.tipo != "cnd" and finding.pago:
+            continue
+        dias = days_until(finding.vencimento, today=today)
+        if dias is not None and dias <= dias_alerta:
+            alerts.append(AlertItem(cnpj=cnpj, finding=finding, motivo=MOTIVOS_VENCIMENTO[finding.tipo]))
     return alerts
 
 
@@ -135,4 +165,34 @@ def check_tenant(
             continue
         findings = storage.findings_for_snapshot(conn, snapshot_id)
         alerts.extend(findings_needing_alert(cnpj, findings, dias_alerta=dias_alerta, today=today))
+    return alerts
+
+
+def _sublimite_label(faturamento_12m: float) -> str | None:
+    if faturamento_12m >= TETO_SIMPLES:
+        return "teto_estourado"
+    if faturamento_12m >= TETO_SIMPLES * ALERTA_PROXIMIDADE_PCT:
+        return "proximo_teto"
+    if faturamento_12m >= SUBLIMITE_SIMPLES:
+        return "sublimite_estourado"
+    if faturamento_12m >= SUBLIMITE_SIMPLES * ALERTA_PROXIMIDADE_PCT:
+        return "proximo_sublimite"
+    return None
+
+
+def check_sublimite_simples(conn: sqlite3.Connection, tenant_id: int, referencia: str) -> list[SublimiteAlertItem]:
+    """Alerta CNPJs no regime Simples Nacional perto do sublimite/teto de
+    faturamento acumulado nos últimos 12 meses (`referencia` = "YYYY-MM").
+
+    Só considera CNPJs com `regime_tributario == "simples"` — os outros
+    regimes não têm esse limite.
+    """
+    alerts: list[SublimiteAlertItem] = []
+    for cnpj in storage.list_cnpjs(conn, tenant_id):
+        if cnpj.regime_tributario != "simples":
+            continue
+        total = storage.faturamento_acumulado_12m(conn, cnpj.id, referencia)
+        label = _sublimite_label(total)
+        if label:
+            alerts.append(SublimiteAlertItem(cnpj=cnpj, faturamento_12m=total, label=label))
     return alerts

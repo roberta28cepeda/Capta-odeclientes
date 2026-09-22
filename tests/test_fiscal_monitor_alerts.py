@@ -61,3 +61,25 @@ def test_send_whatsapp_report_sends_pdf_when_contact_exists():
     mock_send.assert_called_once_with(
         "output/relatorio.pdf", "5511999999999", "PHONE_ID", "TOKEN", caption="Relatório fiscal — Escritório A"
     )
+
+
+CNPJ_SIMPLES = storage.Cnpj(id=2, tenant_id=1, cnpj="99.888.777/0001-11", razao_social="Simples LTDA", nome_fantasia=None, ativo=True, regime_tributario="simples")
+SUBLIMITE_ITEM = monitor.SublimiteAlertItem(cnpj=CNPJ_SIMPLES, faturamento_12m=3_700_000.0, label="sublimite_estourado")
+
+
+def test_format_sublimite_alert_includes_label_and_faturamento():
+    text = alerts.format_sublimite_alert(SUBLIMITE_ITEM)
+
+    assert "Simples LTDA" in text
+    assert "Sublimite do Simples ultrapassado" in text
+    assert "3.700.000,00" in text or "3,700,000.00" in text
+
+
+def test_format_sublimite_summary_handles_empty_list():
+    summary = alerts.format_sublimite_summary(TENANT_COM_WHATSAPP, [])
+    assert "Nenhum CNPJ" in summary
+
+
+def test_format_sublimite_summary_counts_items():
+    summary = alerts.format_sublimite_summary(TENANT_COM_WHATSAPP, [SUBLIMITE_ITEM])
+    assert summary.startswith("1 CNPJ(s)")

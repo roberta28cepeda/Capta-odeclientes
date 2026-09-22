@@ -9,6 +9,7 @@ Uso:
     python -m src.fiscal_monitor.cli --import-tenant --nome "Escritório X" --whatsapp 5511999999999
     python -m src.fiscal_monitor.cli --import-portfolio --tenant-id 1 --csv carteira.csv
     python -m src.fiscal_monitor.cli --import-snapshot --tenant-id 1 --csv snapshot_ecac.csv
+    python -m src.fiscal_monitor.cli --import-faturamento --tenant-id 1 --csv faturamento.csv
     python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5
     python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp
     python -m src.fiscal_monitor.cli --serve --port 8090
@@ -20,6 +21,7 @@ import argparse
 import csv
 import os
 import sys
+from datetime import date
 
 from dotenv import load_dotenv
 
@@ -35,6 +37,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode.add_argument("--import-tenant", action="store_true", help="Cadastra um novo escritório (tenant)")
     mode.add_argument("--import-portfolio", action="store_true", help="Importa carteira de CNPJs de um CSV")
     mode.add_argument("--import-snapshot", action="store_true", help="Importa achados fiscais de um CSV")
+    mode.add_argument(
+        "--import-faturamento", action="store_true", help="Importa faturamento mensal de um CSV (pro sublimite do Simples)"
+    )
     mode.add_argument("--check", action="store_true", help="Roda o motor de alertas sobre o último snapshot")
     mode.add_argument("--serve", action="store_true", help="Sobe o dashboard web")
 
@@ -48,7 +53,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--dias-alerta",
         type=int,
         default=monitor.DEFAULT_DIAS_ALERTA,
-        help="Janela de dias pra alertar DAS a vencer, em --check",
+        help="Janela de dias pra alertar DAS/CND/parcelamento a vencer, em --check",
+    )
+    parser.add_argument(
+        "--referencia",
+        default=None,
+        help="Competência 'YYYY-MM' de referência pro sublimite do Simples, em --check (default: mês atual)",
     )
     parser.add_argument("--pdf", action="store_true", help="Em --check, gera o relatório de carteira em PDF")
     parser.add_argument("--output-dir", default="output", help="Diretório de saída do PDF (--check --pdf)")
@@ -103,16 +113,54 @@ def main(argv: list[str] | None = None) -> int:
                 cnpj = (row.get("cnpj") or "").strip()
                 if not cnpj:
                     continue
+                regime = (row.get("regime_tributario") or "").strip().lower() or None
+                if regime is not None and regime not in storage.REGIMES_TRIBUTARIOS:
+                    print(
+                        f"Erro: regime_tributario '{regime}' inválido pro CNPJ {cnpj} — "
+                        f"use um de {sorted(storage.REGIMES_TRIBUTARIOS)}.",
+                        file=sys.stderr,
+                    )
+                    conn.close()
+                    return 1
                 storage.upsert_cnpj(
                     conn,
                     args.tenant_id,
                     cnpj,
                     razao_social=(row.get("razao_social") or "").strip() or None,
                     nome_fantasia=(row.get("nome_fantasia") or "").strip() or None,
+                    regime_tributario=regime,
                 )
                 count += 1
         conn.close()
         print(f"{count} CNPJ(s) importado(s) para o tenant {args.tenant_id}.")
+        return 0
+
+    if args.import_faturamento:
+        if not _require(args.tenant_id, "--tenant-id") or not _require(args.csv, "--csv"):
+            return 1
+        conn = storage.connect(args.db_path)
+        if _get_tenant_or_fail(conn, args.tenant_id) is None:
+            conn.close()
+            return 1
+
+        count = 0
+        with open(args.csv, encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                cnpj_numero = (row.get("cnpj") or "").strip()
+                competencia = (row.get("competencia") or "").strip()
+                if not cnpj_numero or not competencia:
+                    continue
+                cnpj = storage.get_cnpj_by_number(conn, args.tenant_id, cnpj_numero)
+                if cnpj is None:
+                    print(
+                        f"Aviso: CNPJ {cnpj_numero} não está na carteira do tenant {args.tenant_id} — pulando.",
+                        file=sys.stderr,
+                    )
+                    continue
+                storage.record_faturamento(conn, cnpj.id, competencia, float(row.get("valor") or 0))
+                count += 1
+        conn.close()
+        print(f"{count} registro(s) de faturamento importado(s).")
         return 0
 
     if args.import_snapshot:
@@ -157,6 +205,11 @@ def main(argv: list[str] | None = None) -> int:
 
         alert_items = monitor.check_tenant(conn, args.tenant_id, dias_alerta=args.dias_alerta)
         print(alerts.format_alerts_summary(tenant, alert_items))
+
+        referencia = args.referencia or date.today().strftime("%Y-%m")
+        sublimite_items = monitor.check_sublimite_simples(conn, args.tenant_id, referencia)
+        print()
+        print(alerts.format_sublimite_summary(tenant, sublimite_items))
 
         pdf_path = None
         if args.pdf:

@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 
 DEFAULT_DB_PATH = "output/fiscal_monitor.db"
 
+REGIMES_TRIBUTARIOS = {"mei", "simples", "presumido", "real"}
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tenants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +32,16 @@ CREATE TABLE IF NOT EXISTS cnpjs (
     razao_social TEXT,
     nome_fantasia TEXT,
     ativo INTEGER NOT NULL DEFAULT 1,
+    regime_tributario TEXT,
     UNIQUE(tenant_id, cnpj)
+);
+
+CREATE TABLE IF NOT EXISTS faturamentos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    competencia TEXT NOT NULL,
+    valor REAL NOT NULL,
+    UNIQUE(cnpj_id, competencia)
 );
 
 CREATE TABLE IF NOT EXISTS snapshots (
@@ -71,6 +82,7 @@ class Cnpj:
     razao_social: str | None
     nome_fantasia: str | None
     ativo: bool
+    regime_tributario: str | None = None
 
 
 @dataclass
@@ -90,7 +102,22 @@ def connect(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Adiciona colunas novas em bancos criados por uma versão anterior do schema.
+
+    `CREATE TABLE IF NOT EXISTS` já cobre tabelas novas (ex: `faturamentos`)
+    — isso aqui só cobre coluna nova em tabela existente, que o SQLite não
+    tem `ADD COLUMN IF NOT EXISTS` para.
+    """
+    try:
+        conn.execute("ALTER TABLE cnpjs ADD COLUMN regime_tributario TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # coluna já existe
 
 
 def create_tenant(
@@ -133,16 +160,18 @@ def upsert_cnpj(
     cnpj: str,
     razao_social: str | None = None,
     nome_fantasia: str | None = None,
+    regime_tributario: str | None = None,
 ) -> Cnpj:
     conn.execute(
         """
-        INSERT INTO cnpjs (tenant_id, cnpj, razao_social, nome_fantasia, ativo)
-        VALUES (?, ?, ?, ?, 1)
+        INSERT INTO cnpjs (tenant_id, cnpj, razao_social, nome_fantasia, ativo, regime_tributario)
+        VALUES (?, ?, ?, ?, 1, ?)
         ON CONFLICT(tenant_id, cnpj) DO UPDATE SET
             razao_social = excluded.razao_social,
-            nome_fantasia = excluded.nome_fantasia
+            nome_fantasia = excluded.nome_fantasia,
+            regime_tributario = excluded.regime_tributario
         """,
-        (tenant_id, cnpj, razao_social, nome_fantasia),
+        (tenant_id, cnpj, razao_social, nome_fantasia, regime_tributario),
     )
     conn.commit()
     return get_cnpj_by_number(conn, tenant_id, cnpj)  # type: ignore[return-value]
@@ -158,6 +187,11 @@ def get_cnpj_by_number(conn: sqlite3.Connection, tenant_id: int, cnpj: str) -> C
     return _row_to_cnpj(row) if row else None
 
 
+def get_cnpj(conn: sqlite3.Connection, cnpj_id: int) -> Cnpj | None:
+    row = conn.execute("SELECT * FROM cnpjs WHERE id = ?", (cnpj_id,)).fetchone()
+    return _row_to_cnpj(row) if row else None
+
+
 def _row_to_cnpj(row: sqlite3.Row) -> Cnpj:
     return Cnpj(
         id=row["id"],
@@ -166,6 +200,7 @@ def _row_to_cnpj(row: sqlite3.Row) -> Cnpj:
         razao_social=row["razao_social"],
         nome_fantasia=row["nome_fantasia"],
         ativo=bool(row["ativo"]),
+        regime_tributario=row["regime_tributario"],
     )
 
 
@@ -227,6 +262,64 @@ def _row_to_finding(row: sqlite3.Row) -> Finding:
         pago=bool(row["pago"]),
         status=row["status"],
     )
+
+
+def record_faturamento(conn: sqlite3.Connection, cnpj_id: int, competencia: str, valor: float) -> None:
+    """Registra o faturamento de uma competência ("YYYY-MM"). Sobrescreve se já existir."""
+    conn.execute(
+        """
+        INSERT INTO faturamentos (cnpj_id, competencia, valor)
+        VALUES (?, ?, ?)
+        ON CONFLICT(cnpj_id, competencia) DO UPDATE SET valor = excluded.valor
+        """,
+        (cnpj_id, competencia, valor),
+    )
+    conn.commit()
+
+
+def _last_12_competencias(referencia: str) -> list[str]:
+    year, month = (int(p) for p in referencia.split("-"))
+    competencias = []
+    for i in range(12):
+        m = month - i
+        y = year
+        while m <= 0:
+            m += 12
+            y -= 1
+        competencias.append(f"{y:04d}-{m:02d}")
+    return competencias
+
+
+def faturamento_acumulado_12m(conn: sqlite3.Connection, cnpj_id: int, referencia: str) -> float:
+    """Soma o faturamento dos 12 meses terminando em `referencia` ("YYYY-MM"), inclusive."""
+    competencias = _last_12_competencias(referencia)
+    placeholders = ",".join("?" for _ in competencias)
+    row = conn.execute(
+        f"SELECT COALESCE(SUM(valor), 0) AS total FROM faturamentos "
+        f"WHERE cnpj_id = ? AND competencia IN ({placeholders})",
+        (cnpj_id, *competencias),
+    ).fetchone()
+    return row["total"]
+
+
+def all_findings_for_cnpj(conn: sqlite3.Connection, cnpj_id: int) -> list[tuple[str, str, Finding]]:
+    """Histórico completo (todas as rodadas de checagem) de um CNPJ, mais recente primeiro.
+
+    Retorna (verificado_em, provider, finding) — inclui achados `resolvida`,
+    ao contrário de `findings_by_cnpj_for_tenant` (que só mostra o que está
+    aberto agora).
+    """
+    rows = conn.execute(
+        """
+        SELECT snapshots.verificado_em AS verificado_em, snapshots.provider AS provider, findings.*
+        FROM findings
+        JOIN snapshots ON snapshots.id = findings.snapshot_id
+        WHERE snapshots.cnpj_id = ?
+        ORDER BY snapshots.id DESC, findings.id
+        """,
+        (cnpj_id,),
+    ).fetchall()
+    return [(row["verificado_em"], row["provider"], _row_to_finding(row)) for row in rows]
 
 
 def findings_by_cnpj_for_tenant(conn: sqlite3.Connection, tenant_id: int) -> list[tuple[Cnpj, list[Finding]]]:

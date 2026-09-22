@@ -239,30 +239,42 @@ python -m pytest -q
 ## Módulo: Monitoramento Fiscal (estilo Veri)
 
 Produto de carteira: um escritório contábil (tenant) cadastra os CNPJs
-dos seus clientes, importa achados fiscais (pendências, multas,
-notificações Federal/Estadual/Municipal e guias **DAS**), e o sistema
+dos seus clientes — com o **regime tributário** de cada um (MEI, Simples,
+Presumido, Real) — e importa achados fiscais: pendências, multas,
+notificações (Federal/Estadual/Municipal), guias **DAS**, **CNDs**
+(certidões negativas, com data de validade), **parcelamentos** (parcelas
+de acordos fiscais) e mensagens de **caixa postal do e-CAC**. O sistema
 compara cada importação com a anterior, classifica cada achado como
 **nova** / **recorrente** / **resolvida**, prioriza o que merece alerta
-(todo achado novo, mais DAS não pago perto do vencimento) e disponibiliza
-tudo num dashboard web — inspirado nas funcionalidades da [Veri](https://veri.com.br/),
-mas pensado desde já como produto multi-tenant pra vender a outros
-escritórios, não só uso interno.
+(achado novo, ou DAS/CND/parcelamento perto do vencimento), monitora o
+**sublimite/teto do Simples Nacional** por faturamento acumulado de 12
+meses, e disponibiliza tudo num dashboard web com histórico por CNPJ —
+inspirado nas funcionalidades da [Veri](https://veri.com.br/), mas pensado
+desde já como produto multi-tenant pra vender a outros escritórios, não só
+uso interno.
 
-### O que este MVP não faz
+### O que este MVP não faz (ainda)
 
-Não existe API oficial pra consultar pendências/multas ou emitir guia DAS
-em nome de terceiros — a Veri e concorrentes automatizam o **e-CAC/DCTFWeb**
-usando o **certificado digital (A1/A3)** de cada cliente contábil. Isso é
-tecnicamente viável mas juridicamente sensível (acesso a sistemas do
-governo em nome de terceiros, custódia do certificado digital do cliente)
-e não foi implementado aqui — decisão de produto que precisa ser tomada
-com calma, e testada contra o e-CAC real com certificado em mãos.
+A Veri e concorrentes puxam dado ao vivo do e-CAC via **Serpro Integra
+Contador** — o canal oficial homologado pela Receita Federal (não é
+scraping). Pra ativar essa integração de verdade falta:
 
-Por isso os achados fiscais entram via **CSV** (`--import-snapshot`) — de
-um export manual do e-CAC feito pelo próprio escritório, ou de qualquer
-scraper que ele já use. O sistema cuida do diff, priorização, alerta e
-dashboard; a fonte do dado é plugável (`src/fiscal_monitor/providers.py`,
-`FiscalDataProvider`) pra quando a integração real existir.
+1. Contrato de consumo com o Serpro (pago por chamada de API).
+2. Procuração eletrônica assinada por cada cliente contábil, autorizando o
+   escritório a consultar os dados fiscais dele via essa API.
+3. Certificado digital (e-CNPJ) do escritório, pra autenticar as chamadas.
+
+Sem essas três coisas em mãos não dá pra implementar de forma testável —
+o terreno já está preparado (`src/fiscal_monitor/providers.py`, classe
+`SerproIntegraContadorProvider`, que implementa a interface
+`FiscalDataProvider` mas levanta `NotImplementedError` documentando
+exatamente isso), mas a chamada real fica para quando o contrato/certificado
+existirem.
+
+Por enquanto os achados fiscais e o faturamento entram via **CSV**
+(`--import-snapshot` / `--import-faturamento`) — de um export manual do
+e-CAC feito pelo próprio escritório, ou de qualquer scraper que ele já
+use. O sistema cuida do diff, priorização, alerta e dashboard.
 
 ### Setup adicional
 
@@ -274,23 +286,28 @@ além do `requirements.txt` já instalado — a persistência é SQLite puro
 ### Uso
 
 ```bash
-# cadastra um escritório (tenant) e sua carteira de CNPJs
+# cadastra um escritório (tenant) e sua carteira de CNPJs (com regime tributário)
 python -m src.fiscal_monitor.cli --import-tenant --nome "Escritório X" --whatsapp 5511999999999
 python -m src.fiscal_monitor.cli --import-portfolio --tenant-id 1 --csv carteira.csv
 
-# importa uma leva de achados fiscais (formato: cnpj,esfera,tipo,descricao,valor,vencimento,pago)
+# importa achados fiscais (cnpj,esfera,tipo,descricao,valor,vencimento,pago)
+# tipos aceitos: pendencia, multa, notificacao, das, cnd, parcelamento, caixa_postal
 python -m src.fiscal_monitor.cli --import-snapshot --tenant-id 1 --csv snapshot_ecac.csv
 
-# roda o motor de alertas sobre o último snapshot, opcionalmente gerando PDF e enviando por WhatsApp
-python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5
+# importa faturamento mensal (cnpj,competencia,valor) — usado no sublimite do Simples
+python -m src.fiscal_monitor.cli --import-faturamento --tenant-id 1 --csv faturamento.csv
+
+# roda o motor de alertas (achados + sublimite do Simples), opcionalmente gerando PDF e enviando por WhatsApp
+python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5 --referencia 2026-09
 python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp
 
-# dashboard web (lista de tenants, carteira e achados em aberto)
+# dashboard web (tenants, carteira com regime, sublimite, achados em aberto e histórico por CNPJ)
 python -m src.fiscal_monitor.cli --serve --port 8090
 ```
 
-Veja `examples/fiscal_monitor_carteira_exemplo.csv` e
-`examples/fiscal_monitor_snapshot_exemplo.csv` para o formato esperado.
+Veja `examples/fiscal_monitor_carteira_exemplo.csv`,
+`examples/fiscal_monitor_snapshot_exemplo.csv` e
+`examples/fiscal_monitor_faturamento_exemplo.csv` para o formato esperado.
 
 ### Testes
 
@@ -308,5 +325,5 @@ python -m pytest -q
 | Análise de call | Médio | ✅ MVP implementado |
 | Inbox + sugestão de resposta | Médio | ✅ MVP implementado |
 | WhatsApp via Cloud API oficial | Antes "arriscado" (API não-oficial); via Meta é burocrático mas seguro | ✅ MVP implementado |
-| Monitoramento Fiscal (estilo Veri) — via CSV | Médio | ✅ MVP implementado |
-| Monitoramento Fiscal — integração real e-CAC/DCTFWeb via certificado digital | Difícil (jurídico + técnico) | ⏳ Não implementado — ver seção acima |
+| Monitoramento Fiscal (estilo Veri) — via CSV, com CND/parcelamento/sublimite Simples | Médio | ✅ MVP implementado |
+| Monitoramento Fiscal — integração real via Serpro Integra Contador (canal oficial Receita Federal) | Difícil (contrato Serpro + certificado digital) | ⏳ Terreno preparado (`SerproIntegraContadorProvider`), não ativado — ver seção acima |
