@@ -29,6 +29,7 @@ _TENANTS_TEMPLATE = """
 <title>Monitoramento Fiscal</title>
 <h1>Escritórios monitorados</h1>
 <p><a href="/pre-analise">Gerar pré-análise pública (só CNPJ, sem procuração) &rarr;</a></p>
+<p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
 {% for tenant, count in tenants %}
@@ -123,6 +124,65 @@ _PRE_ANALISE_FORM_TEMPLATE = """
   <p><label>Logo (opcional)<br><input type="file" name="logo" accept="image/*"></label></p>
   <button type="submit">Gerar pré-análise (PDF)</button>
 </form>
+<p style="margin-top:2rem;font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
+"""
+
+_PRIVACIDADE_TEMPLATE = """
+<!doctype html>
+<title>Política de Privacidade</title>
+<h1>Política de Privacidade e Proteção de Dados (LGPD)</h1>
+<p><em>Última atualização: {{ hoje }}</em></p>
+
+<h2>1. Quem é o responsável pelos dados</h2>
+<p>
+  <strong>LEAO CONSULTORIA ESTRATEGICA LTDA</strong> (Leactis),
+  CNPJ 63.586.147/0001-25, é a controladora dos dados tratados nesta
+  plataforma de monitoramento fiscal, nos termos da Lei Geral de Proteção
+  de Dados (Lei nº 13.709/2018 — LGPD).
+</p>
+
+<h2>2. Quais dados coletamos, e de onde</h2>
+<p><strong>Pré-análise pública</strong> (página <code>/pre-analise</code>):
+o CNPJ informado é consultado em tempo real na
+<a href="https://brasilapi.com.br" target="_blank" rel="noopener">BrasilAPI</a>,
+um serviço de terceiros que espelha dados públicos da Receita Federal
+(situação cadastral, natureza jurídica, enquadramento no Simples
+Nacional/MEI). Essa consulta <strong>não é armazenada</strong> em nosso
+banco de dados — o PDF é gerado na hora e a busca não fica salva.</p>
+<p><strong>Carteira de clientes do escritório contábil</strong> (área
+autenticada): CNPJ, razão social, regime tributário, contato de WhatsApp
+do escritório, e os achados fiscais (pendências, multas, DAS, CNDs,
+parcelamentos) que o próprio escritório importa manualmente. Esses dados
+ficam armazenados em nosso banco enquanto o escritório for cliente.</p>
+
+<h2>3. Com quem compartilhamos</h2>
+<ul>
+  <li><strong>BrasilAPI</strong> — recebe o CNPJ digitado na pré-análise pública, pra devolver o dado cadastral público correspondente.</li>
+  <li><strong>Meta (WhatsApp Cloud API)</strong> — usada só se o escritório optar por receber alertas fiscais por WhatsApp; recebe o número de contato cadastrado e o texto do alerta.</li>
+</ul>
+<p>Não vendemos nem compartilhamos dados com terceiros para fins de publicidade.</p>
+
+<h2>4. Por quanto tempo guardamos</h2>
+<p>Os dados da carteira de clientes ficam armazenados enquanto o
+escritório contábil for cliente da Leactis. Não há exclusão automática
+por prazo — a exclusão acontece mediante solicitação (veja abaixo) ou ao
+fim da relação contratual.</p>
+
+<h2>5. Segurança</h2>
+<p>A conexão com o site é criptografada (HTTPS). O acesso à carteira de
+cada escritório é protegido por um token de acesso individual; a listagem
+administrativa de todos os escritórios exige autenticação própria. Ainda
+assim, nenhum sistema é 100% livre de risco — se você suspeitar de
+qualquer uso indevido, entre em contato imediatamente pelo canal abaixo.</p>
+
+<h2>6. Seus direitos</h2>
+<p>Como titular dos dados, você pode solicitar a qualquer momento:
+confirmação de que tratamos seus dados, acesso, correção, exclusão,
+portabilidade, ou informação sobre com quem compartilhamos seus dados.</p>
+
+<h2>7. Contato</h2>
+<p>Para exercer esses direitos ou tirar dúvidas sobre este tratamento de
+dados, escreva para <a href="mailto:contato@leactis.com.br">contato@leactis.com.br</a>.</p>
 """
 
 
@@ -171,6 +231,10 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
     @app.get("/health")
     def health():
         return jsonify({"status": "ok"})
+
+    @app.get("/privacidade")
+    def privacidade():
+        return render_template_string(_PRIVACIDADE_TEMPLATE, hoje=date.today().strftime("%d/%m/%Y"))
 
     @app.route("/pre-analise", methods=["GET", "POST"])
     def pre_analise():

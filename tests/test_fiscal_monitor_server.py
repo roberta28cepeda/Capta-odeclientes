@@ -59,6 +59,14 @@ def test_health_returns_ok(app):
     assert response.get_json() == {"status": "ok"}
 
 
+def test_privacidade_page_is_public_and_shows_controller_and_contact(app):
+    response = app.test_client().get("/privacidade")
+    assert response.status_code == 200
+    assert b"LEAO CONSULTORIA ESTRATEGICA LTDA" in response.data
+    assert b"63.586.147/0001-25" in response.data
+    assert b"contato@leactis.com.br" in response.data
+
+
 def test_tenants_list_requires_admin_auth_by_default(app):
     response = app.test_client().get("/tenants")
     assert response.status_code == 401
