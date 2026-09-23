@@ -345,6 +345,32 @@ Veja `examples/fiscal_monitor_carteira_exemplo.csv`,
 python -m pytest -q
 ```
 
+### Deploy no Vercel (dashboard acessível pela internet)
+
+Por padrão o módulo usa SQLite local (arquivo em `output/`) — funciona
+bem local/CLI, mas **não serve pra hospedar**: funções serverless (como
+as do Vercel) não têm disco persistente entre execuções. Por isso, em
+produção o módulo troca automaticamente pra **Postgres** assim que uma
+destas variáveis de ambiente existir: `DATABASE_URL`, `POSTGRES_URL` ou
+`POSTGRES_URL_NON_POOLING` (é o que a integração de banco do Vercel
+injeta sozinha ao conectar um Postgres ao projeto). O schema é criado
+automaticamente na primeira conexão — não precisa rodar migration à parte.
+
+Passos:
+
+1. No projeto Vercel, aba **Storage** → **Create Database** → Postgres —
+   isso já injeta a variável de conexão certa no projeto.
+2. Configure as outras variáveis que os módulos usam (`ANTHROPIC_API_KEY`,
+   `WHATSAPP_ACCESS_TOKEN`, etc., conforme o que for usar) em
+   **Settings → Environment Variables**.
+3. Deploy — o Vercel usa `api/index.py` (expõe o dashboard Flask de
+   `src/fiscal_monitor/server.py`) e `vercel.json` já prontos no repo.
+
+O `/pre-analise` funciona igual, servindo o PDF direto do navegador. Os
+outros módulos (`prospecting`, `proposals`, `whatsapp`, etc.) continuam
+sendo CLI local — só o `fiscal_monitor` tem essa camada web pensada pra
+hospedagem.
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |
