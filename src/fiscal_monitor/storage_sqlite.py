@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import sqlite3
 from datetime import datetime, timezone
 
@@ -19,7 +20,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     nome TEXT NOT NULL,
     contato_whatsapp TEXT,
     plano TEXT,
-    criado_em TEXT NOT NULL
+    criado_em TEXT NOT NULL,
+    acesso_token TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS cnpjs (
@@ -87,18 +89,38 @@ def _migrate(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass  # coluna já existe
 
+    try:
+        conn.execute("ALTER TABLE tenants ADD COLUMN acesso_token TEXT NOT NULL DEFAULT ''")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # coluna já existe
+
+    # Bancos antigos ganham token vazio pela migração acima — gera um de verdade
+    # pra cada tenant que ainda não tem, senão o dono fica trancado pra fora.
+    rows = conn.execute("SELECT id FROM tenants WHERE acesso_token = ''").fetchall()
+    for row in rows:
+        conn.execute("UPDATE tenants SET acesso_token = ? WHERE id = ?", (secrets.token_urlsafe(24), row["id"]))
+    if rows:
+        conn.commit()
+
 
 def create_tenant(
     conn: sqlite3.Connection, nome: str, contato_whatsapp: str | None = None, plano: str | None = None
 ) -> Tenant:
     criado_em = datetime.now(timezone.utc).isoformat()
+    acesso_token = secrets.token_urlsafe(24)
     cursor = conn.execute(
-        "INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em) VALUES (?, ?, ?, ?)",
-        (nome, contato_whatsapp, plano, criado_em),
+        "INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token) VALUES (?, ?, ?, ?, ?)",
+        (nome, contato_whatsapp, plano, criado_em, acesso_token),
     )
     conn.commit()
     return Tenant(
-        id=cursor.lastrowid, nome=nome, contato_whatsapp=contato_whatsapp, plano=plano, criado_em=criado_em
+        id=cursor.lastrowid,
+        nome=nome,
+        contato_whatsapp=contato_whatsapp,
+        plano=plano,
+        criado_em=criado_em,
+        acesso_token=acesso_token,
     )
 
 
@@ -119,6 +141,7 @@ def _row_to_tenant(row: sqlite3.Row) -> Tenant:
         contato_whatsapp=row["contato_whatsapp"],
         plano=row["plano"],
         criado_em=row["criado_em"],
+        acesso_token=row["acesso_token"],
     )
 
 

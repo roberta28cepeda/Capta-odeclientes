@@ -12,6 +12,7 @@ de propósito, pra manter o formato de linha idêntico ao do backend SQLite
 from __future__ import annotations
 
 import os
+import secrets
 from datetime import datetime, timezone
 
 import psycopg2
@@ -27,7 +28,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     nome TEXT NOT NULL,
     contato_whatsapp TEXT,
     plano TEXT,
-    criado_em TEXT NOT NULL
+    criado_em TEXT NOT NULL,
+    acesso_token TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS cnpjs (
@@ -71,6 +73,12 @@ CREATE TABLE IF NOT EXISTS findings (
 
 _CONNECTION_ENV_VARS = ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_URL_NON_POOLING")
 
+# `ALTER TABLE` pede lock exclusivo — rodar isso em todo connect() serializaria
+# (ou travaria) requisições concorrentes num ambiente serverless. Roda só uma
+# vez por processo "quente"; correto porque um deployment usa sempre o mesmo
+# DATABASE_URL durante seu tempo de vida.
+_schema_ready = False
+
 
 def _connection_string() -> str:
     for var in _CONNECTION_ENV_VARS:
@@ -84,23 +92,37 @@ def _connection_string() -> str:
 
 
 def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
+    global _schema_ready
     conn = psycopg2.connect(_connection_string(), cursor_factory=psycopg2.extras.RealDictCursor)
-    with conn.cursor() as cur:
-        cur.execute(SCHEMA)
-    conn.commit()
+    if not _schema_ready:
+        with conn.cursor() as cur:
+            cur.execute(SCHEMA)
+            cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS acesso_token TEXT NOT NULL DEFAULT ''")
+            cur.execute(
+                "UPDATE tenants SET acesso_token = md5(random()::text || id::text) WHERE acesso_token = ''"
+            )
+        conn.commit()
+        _schema_ready = True
     return conn
 
 
 def create_tenant(conn, nome: str, contato_whatsapp: str | None = None, plano: str | None = None) -> Tenant:
     criado_em = datetime.now(timezone.utc).isoformat()
+    acesso_token = secrets.token_urlsafe(24)
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em) VALUES (%s, %s, %s, %s) RETURNING id",
-            (nome, contato_whatsapp, plano, criado_em),
+            """
+            INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id
+            """,
+            (nome, contato_whatsapp, plano, criado_em, acesso_token),
         )
         tenant_id = cur.fetchone()["id"]
     conn.commit()
-    return Tenant(id=tenant_id, nome=nome, contato_whatsapp=contato_whatsapp, plano=plano, criado_em=criado_em)
+    return Tenant(
+        id=tenant_id, nome=nome, contato_whatsapp=contato_whatsapp, plano=plano, criado_em=criado_em,
+        acesso_token=acesso_token,
+    )
 
 
 def get_tenant(conn, tenant_id: int) -> Tenant | None:
@@ -124,6 +146,7 @@ def _row_to_tenant(row) -> Tenant:
         contato_whatsapp=row["contato_whatsapp"],
         plano=row["plano"],
         criado_em=row["criado_em"],
+        acesso_token=row["acesso_token"],
     )
 
 

@@ -1,3 +1,4 @@
+import base64
 import os
 import tempfile
 from unittest.mock import patch
@@ -20,6 +21,11 @@ SAMPLE_CNPJ_RESPONSE = {
 }
 
 
+def _basic_auth_header(username: str, password: str) -> dict:
+    token = base64.b64encode(f"{username}:{password}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
 @pytest.fixture
 def db_path():
     with tempfile.TemporaryDirectory() as tmp:
@@ -37,7 +43,14 @@ def app(db_path):
 
     application = create_app(db_path=db_path)
     application.config["_tenant_id"] = tenant.id
+    application.config["_tenant_token"] = tenant.acesso_token
     return application
+
+
+def _tenant_url(app, path: str = "") -> str:
+    tenant_id = app.config["_tenant_id"]
+    token = app.config["_tenant_token"]
+    return f"/tenants/{tenant_id}{path}?token={token}"
 
 
 def test_health_returns_ok(app):
@@ -46,27 +59,58 @@ def test_health_returns_ok(app):
     assert response.get_json() == {"status": "ok"}
 
 
-def test_tenants_list_shows_tenant_and_cnpj_count(app):
+def test_tenants_list_requires_admin_auth_by_default(app):
     response = app.test_client().get("/tenants")
+    assert response.status_code == 401
+
+
+def test_tenants_list_shows_tenant_and_cnpj_count_with_admin_auth(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/tenants", headers=_basic_auth_header("admin", "senha-secreta"))
     assert response.status_code == 200
     assert b"Escrit\xc3\xb3rio A" in response.data or "Escritório A".encode() in response.data
 
 
+def test_tenants_list_rejects_wrong_admin_password(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/tenants", headers=_basic_auth_header("admin", "errada"))
+    assert response.status_code == 401
+
+
 def test_tenant_detail_returns_404_for_missing_tenant(app):
-    response = app.test_client().get("/tenants/999")
+    response = app.test_client().get("/tenants/999?token=qualquer")
     assert response.status_code == 404
 
 
-def test_tenant_detail_shows_open_finding(app):
+def test_tenant_detail_requires_token_or_admin(app):
     tenant_id = app.config["_tenant_id"]
     response = app.test_client().get(f"/tenants/{tenant_id}")
+    assert response.status_code == 403
+
+
+def test_tenant_detail_rejects_wrong_token(app):
+    tenant_id = app.config["_tenant_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}?token=token-errado")
+    assert response.status_code == 403
+
+
+def test_tenant_detail_accessible_with_correct_token(app):
+    response = app.test_client().get(_tenant_url(app))
     assert response.status_code == 200
     assert "DAS 08/2026".encode() in response.data
 
 
-def test_tenant_findings_json_returns_open_findings(app):
+def test_tenant_detail_accessible_with_admin_auth_without_token(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
     tenant_id = app.config["_tenant_id"]
-    response = app.test_client().get(f"/tenants/{tenant_id}/findings.json")
+    response = app.test_client().get(
+        f"/tenants/{tenant_id}", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+
+
+def test_tenant_findings_json_returns_open_findings(app):
+    response = app.test_client().get(_tenant_url(app, "/findings.json"))
     assert response.status_code == 200
     data = response.get_json()
     assert len(data) == 1
@@ -75,14 +119,19 @@ def test_tenant_findings_json_returns_open_findings(app):
     assert data[0]["status"] == "nova"
 
 
+def test_tenant_findings_json_requires_token(app):
+    tenant_id = app.config["_tenant_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/findings.json")
+    assert response.status_code == 403
+
+
 def test_tenant_findings_json_returns_404_for_missing_tenant(app):
-    response = app.test_client().get("/tenants/999/findings.json")
+    response = app.test_client().get("/tenants/999/findings.json?token=qualquer")
     assert response.status_code == 404
 
 
 def test_tenant_detail_shows_portfolio_and_regime(app):
-    tenant_id = app.config["_tenant_id"]
-    response = app.test_client().get(f"/tenants/{tenant_id}")
+    response = app.test_client().get(_tenant_url(app))
     assert response.status_code == 200
     assert "11.222.333/0001-44".encode() in response.data
 
@@ -98,10 +147,24 @@ def test_cnpj_history_returns_all_snapshots(db_path):
     conn.close()
 
     application = create_app(db_path=db_path)
-    response = application.test_client().get(f"/tenants/{tenant.id}/cnpjs/{cnpj.id}/historico")
+    response = application.test_client().get(
+        f"/tenants/{tenant.id}/cnpjs/{cnpj.id}/historico?token={tenant.acesso_token}"
+    )
 
     assert response.status_code == 200
     assert b"Multa X" in response.data
+
+
+def test_cnpj_history_requires_token(db_path):
+    conn = storage.connect(db_path)
+    tenant = storage.create_tenant(conn, "Escritório B")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "22.333.444/0001-55")
+    conn.close()
+
+    application = create_app(db_path=db_path)
+    response = application.test_client().get(f"/tenants/{tenant.id}/cnpjs/{cnpj.id}/historico")
+
+    assert response.status_code == 403
 
 
 def test_tenant_detail_shows_sublimite_alert_for_simples_cnpj(db_path):
@@ -113,7 +176,9 @@ def test_tenant_detail_shows_sublimite_alert_for_simples_cnpj(db_path):
     conn.close()
 
     application = create_app(db_path=db_path)
-    response = application.test_client().get(f"/tenants/{tenant.id}", query_string={"referencia": "2026-12"})
+    response = application.test_client().get(
+        f"/tenants/{tenant.id}", query_string={"referencia": "2026-12", "token": tenant.acesso_token}
+    )
 
     assert response.status_code == 200
     assert b"sublimite_estourado" in response.data
@@ -160,6 +225,19 @@ def test_cnpj_history_returns_404_for_cnpj_of_another_tenant(app, db_path):
     conn.close()
 
     tenant_id = app.config["_tenant_id"]
-    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{outro_cnpj.id}/historico")
+    token = app.config["_tenant_token"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{outro_cnpj.id}/historico?token={token}")
 
     assert response.status_code == 404
+
+
+def test_tenant_cannot_access_another_tenants_data_with_own_token(db_path):
+    conn = storage.connect(db_path)
+    tenant_a = storage.create_tenant(conn, "Escritório A")
+    tenant_b = storage.create_tenant(conn, "Escritório B")
+    conn.close()
+
+    application = create_app(db_path=db_path)
+    response = application.test_client().get(f"/tenants/{tenant_b.id}?token={tenant_a.acesso_token}")
+
+    assert response.status_code == 403

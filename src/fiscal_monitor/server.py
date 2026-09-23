@@ -6,11 +6,12 @@ os achados fiscais em aberto, e o formulário de pré-análise pública
 from __future__ import annotations
 
 import os
+import secrets
 import sqlite3
 import tempfile
 from datetime import date
 
-from flask import Flask, after_this_request, jsonify, render_template_string, request, send_file
+from flask import Flask, Response, after_this_request, jsonify, render_template_string, request, send_file
 
 from src.fiscal_monitor import monitor, storage
 from src.fiscal_monitor.pdf import render_pre_analise_pdf
@@ -53,7 +54,7 @@ _TENANT_DETAIL_TEMPLATE = """
   <td>{{ cnpj.cnpj }}</td>
   <td>{{ cnpj.razao_social or "-" }}</td>
   <td>{{ cnpj.regime_tributario or "-" }}</td>
-  <td><a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/historico">histórico</a></td>
+  <td><a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/historico?token={{ request.args.get('token', '') }}">histórico</a></td>
 </tr>
 {% endfor %}
 </table>
@@ -94,7 +95,7 @@ _CNPJ_HISTORY_TEMPLATE = """
 <!doctype html>
 <title>Histórico — {{ cnpj.cnpj }}</title>
 <h1>Histórico — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
-<p><a href="/tenants/{{ cnpj.tenant_id }}">&larr; voltar pro escritório</a></p>
+<p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>Verificado em</th><th>Esfera</th><th>Tipo</th><th>Descrição</th><th>Status</th></tr>
 {% for verificado_em, provider, finding in historico %}
@@ -123,6 +124,42 @@ _PRE_ANALISE_FORM_TEMPLATE = """
   <button type="submit">Gerar pré-análise (PDF)</button>
 </form>
 """
+
+
+def _admin_authenticated() -> bool:
+    """`/tenants` (lista com todos os escritórios) só é visível pra quem
+    conhece a senha de administrador — sem ADMIN_PASSWORD configurada, o
+    acesso é negado por padrão (não liberado).
+    """
+    admin_password = os.environ.get("ADMIN_PASSWORD")
+    if not admin_password:
+        return False
+    admin_username = os.environ.get("ADMIN_USERNAME", "admin")
+    auth = request.authorization
+    if not auth:
+        return False
+    return secrets.compare_digest(auth.username or "", admin_username) and secrets.compare_digest(
+        auth.password or "", admin_password
+    )
+
+
+def _require_admin() -> Response | None:
+    if _admin_authenticated():
+        return None
+    return Response(
+        "Autenticação necessária.", 401, {"WWW-Authenticate": 'Basic realm="Monitoramento Fiscal"'}
+    )
+
+
+def _tenant_authorized(tenant: storage.Tenant) -> bool:
+    """Acesso à carteira de um tenant: senha de admin, ou o token de acesso
+    daquele tenant específico (`?token=...`) — cada escritório só entra na
+    própria carteira, não na dos outros.
+    """
+    if _admin_authenticated():
+        return True
+    token = request.args.get("token", "")
+    return bool(tenant.acesso_token) and secrets.compare_digest(token, tenant.acesso_token)
 
 
 def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
@@ -193,6 +230,9 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
 
     @app.get("/tenants")
     def tenants_list():
+        unauthorized = _require_admin()
+        if unauthorized:
+            return unauthorized
         conn = _connect()
         tenants = storage.list_tenants(conn)
         rows = [(tenant, len(storage.list_cnpjs(conn, tenant.id))) for tenant in tenants]
@@ -206,6 +246,9 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
         if tenant is None:
             conn.close()
             return jsonify({"error": "tenant não encontrado"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
         cnpjs = storage.list_cnpjs(conn, tenant_id)
         findings = _flatten_open_findings(storage.findings_by_cnpj_for_tenant(conn, tenant_id))
         referencia = request.args.get("referencia") or date.today().strftime("%Y-%m")
@@ -222,10 +265,14 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
     @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/historico")
     def cnpj_history(tenant_id: int, cnpj_id: int):
         conn = _connect()
+        tenant = storage.get_tenant(conn, tenant_id)
         cnpj = storage.get_cnpj(conn, cnpj_id)
-        if cnpj is None or cnpj.tenant_id != tenant_id:
+        if tenant is None or cnpj is None or cnpj.tenant_id != tenant_id:
             conn.close()
             return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
         historico = storage.all_findings_for_cnpj(conn, cnpj_id)
         conn.close()
         return render_template_string(_CNPJ_HISTORY_TEMPLATE, cnpj=cnpj, historico=historico)
@@ -237,6 +284,9 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
         if tenant is None:
             conn.close()
             return jsonify({"error": "tenant não encontrado"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
         findings = _flatten_open_findings(storage.findings_by_cnpj_for_tenant(conn, tenant_id))
         conn.close()
         return jsonify(

@@ -17,6 +17,7 @@ class Tenant:
     contato_whatsapp: str | None
     plano: str | None
     criado_em: str
+    acesso_token: str = ""
 
 
 @dataclass

@@ -109,6 +109,10 @@ def main(argv: list[str] | None = None) -> int:
         tenant = storage.create_tenant(conn, args.nome, contato_whatsapp=args.whatsapp, plano=args.plano)
         conn.close()
         print(f"Tenant criado: id={tenant.id} nome={tenant.nome}")
+        print(
+            f"Link de acesso pra esse escritório (guarde/envie com cuidado, dá acesso à carteira dele):\n"
+            f"  /tenants/{tenant.id}?token={tenant.acesso_token}"
+        )
         return 0
 
     if args.import_portfolio:

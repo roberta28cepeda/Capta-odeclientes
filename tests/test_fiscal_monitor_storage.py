@@ -22,6 +22,17 @@ def test_get_tenant_returns_none_when_missing():
     assert storage.get_tenant(conn, 999) is None
 
 
+def test_create_tenant_generates_unique_acesso_token():
+    conn = _conn()
+    tenant_a = storage.create_tenant(conn, "Escritório A")
+    tenant_b = storage.create_tenant(conn, "Escritório B")
+
+    assert tenant_a.acesso_token
+    assert tenant_b.acesso_token
+    assert tenant_a.acesso_token != tenant_b.acesso_token
+    assert storage.get_tenant(conn, tenant_a.id).acesso_token == tenant_a.acesso_token
+
+
 def test_upsert_cnpj_inserts_then_updates_on_conflict():
     conn = _conn()
     tenant = storage.create_tenant(conn, "Escritório A")
