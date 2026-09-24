@@ -1,9 +1,15 @@
+import io
 import os
 import tempfile
 
 import pytest
 
-from src.fiscal_monitor.providers import ManualFiscalProvider, SerproIntegraContadorProvider
+from src.fiscal_monitor import storage
+from src.fiscal_monitor.providers import (
+    ManualFiscalProvider,
+    SerproIntegraContadorProvider,
+    import_portfolio_csv,
+)
 
 VALID_CSV = """cnpj,esfera,tipo,descricao,valor,vencimento,pago
 11.222.333/0001-44,federal,das,DAS competência 08/2026,412.50,2026-09-25,false
@@ -93,3 +99,48 @@ def test_fetch_raises_on_invalid_tipo():
 def test_fetch_raises_oserror_on_missing_file():
     with pytest.raises(OSError):
         ManualFiscalProvider("/nao/existe.csv").fetch()
+
+
+def test_import_portfolio_csv_imports_valid_rows():
+    conn = storage.connect(":memory:")
+    tenant = storage.create_tenant(conn, "Escritório A")
+    csv_file = io.StringIO(
+        "cnpj,razao_social,nome_fantasia,regime_tributario\n"
+        "11.222.333/0001-44,Contabil Exemplo,Fantasia,simples\n"
+        "55.666.777/0001-88,Posto Boa Viagem,,\n"
+    )
+
+    count, erro = import_portfolio_csv(conn, tenant.id, csv_file)
+
+    assert erro is None
+    assert count == 2
+    cnpjs = storage.list_cnpjs(conn, tenant.id)
+    assert len(cnpjs) == 2
+    assert cnpjs[0].regime_tributario == "simples"
+    assert cnpjs[1].regime_tributario is None
+
+
+def test_import_portfolio_csv_stops_on_invalid_regime():
+    conn = storage.connect(":memory:")
+    tenant = storage.create_tenant(conn, "Escritório A")
+    csv_file = io.StringIO(
+        "cnpj,razao_social,nome_fantasia,regime_tributario\n"
+        "11.222.333/0001-44,Contabil Exemplo,,regime_invalido\n"
+    )
+
+    count, erro = import_portfolio_csv(conn, tenant.id, csv_file)
+
+    assert count == 0
+    assert "regime_invalido" in erro
+    assert storage.list_cnpjs(conn, tenant.id) == []
+
+
+def test_import_portfolio_csv_skips_blank_cnpj_rows():
+    conn = storage.connect(":memory:")
+    tenant = storage.create_tenant(conn, "Escritório A")
+    csv_file = io.StringIO("cnpj,razao_social,nome_fantasia,regime_tributario\n,Sem CNPJ,,\n")
+
+    count, erro = import_portfolio_csv(conn, tenant.id, csv_file)
+
+    assert erro is None
+    assert count == 0

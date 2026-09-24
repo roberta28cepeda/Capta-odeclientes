@@ -1,4 +1,5 @@
 import base64
+import io
 import os
 import tempfile
 from unittest.mock import patch
@@ -57,6 +58,57 @@ def test_health_returns_ok(app):
     response = app.test_client().get("/health")
     assert response.status_code == 200
     assert response.get_json() == {"status": "ok"}
+
+
+def test_novo_tenant_requires_admin_auth(app):
+    response = app.test_client().get("/admin/tenants/novo")
+    assert response.status_code == 401
+
+
+def test_novo_tenant_form_renders_with_admin_auth(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/admin/tenants/novo", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert response.status_code == 200
+    assert b"Cadastrar novo escrit\xc3\xb3rio" in response.data
+
+
+def test_novo_tenant_post_creates_tenant_and_returns_access_link(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().post(
+        "/admin/tenants/novo",
+        data={"nome": "Escritório Novo", "whatsapp": "5511988887777"},
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+
+    assert response.status_code == 200
+    assert "Escritório Novo".encode() in response.data
+    assert b"?token=" in response.data
+
+
+def test_novo_tenant_post_rejects_missing_nome(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().post(
+        "/admin/tenants/novo", data={}, headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 400
+
+
+def test_novo_tenant_post_with_portfolio_csv_imports_cnpjs(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    csv_content = b"cnpj,razao_social,nome_fantasia,regime_tributario\n11.222.333/0001-44,Contabil Exemplo,,simples\n"
+
+    response = app.test_client().post(
+        "/admin/tenants/novo",
+        data={
+            "nome": "Escritório Com Carteira",
+            "carteira": (io.BytesIO(csv_content), "carteira.csv"),
+        },
+        content_type="multipart/form-data",
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+
+    assert response.status_code == 200
+    assert b"1 CNPJ(s) importado(s)." in response.data
 
 
 def test_privacidade_page_is_public_and_shows_controller_and_contact(app):

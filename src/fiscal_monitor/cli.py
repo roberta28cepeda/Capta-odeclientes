@@ -29,7 +29,7 @@ from datetime import date
 from dotenv import load_dotenv
 
 from src.fiscal_monitor import alerts, monitor, storage
-from src.fiscal_monitor.providers import ManualFiscalProvider
+from src.fiscal_monitor.providers import ManualFiscalProvider, import_portfolio_csv
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -123,31 +123,12 @@ def main(argv: list[str] | None = None) -> int:
             conn.close()
             return 1
 
-        count = 0
         with open(args.csv, encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                cnpj = (row.get("cnpj") or "").strip()
-                if not cnpj:
-                    continue
-                regime = (row.get("regime_tributario") or "").strip().lower() or None
-                if regime is not None and regime not in storage.REGIMES_TRIBUTARIOS:
-                    print(
-                        f"Erro: regime_tributario '{regime}' inválido pro CNPJ {cnpj} — "
-                        f"use um de {sorted(storage.REGIMES_TRIBUTARIOS)}.",
-                        file=sys.stderr,
-                    )
-                    conn.close()
-                    return 1
-                storage.upsert_cnpj(
-                    conn,
-                    args.tenant_id,
-                    cnpj,
-                    razao_social=(row.get("razao_social") or "").strip() or None,
-                    nome_fantasia=(row.get("nome_fantasia") or "").strip() or None,
-                    regime_tributario=regime,
-                )
-                count += 1
+            count, erro = import_portfolio_csv(conn, args.tenant_id, f)
         conn.close()
+        if erro:
+            print(f"Erro: {erro}", file=sys.stderr)
+            return 1
         print(f"{count} CNPJ(s) importado(s) para o tenant {args.tenant_id}.")
         return 0
 

@@ -5,6 +5,7 @@ os achados fiscais em aberto, e o formulário de pré-análise pública
 
 from __future__ import annotations
 
+import io
 import os
 import secrets
 import sqlite3
@@ -23,11 +24,13 @@ from src.fiscal_monitor.preanalise import (
     only_digits,
     validar_cnpj,
 )
+from src.fiscal_monitor.providers import import_portfolio_csv
 
 _TENANTS_TEMPLATE = """
 <!doctype html>
 <title>Monitoramento Fiscal</title>
 <h1>Escritórios monitorados</h1>
+<p><a href="/admin/tenants/novo">+ Cadastrar novo escritório</a></p>
 <p><a href="/pre-analise">Gerar pré-análise pública (só CNPJ, sem procuração) &rarr;</a></p>
 <p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
@@ -110,6 +113,33 @@ _CNPJ_HISTORY_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not historico %}<p>Nenhum snapshot importado ainda para este CNPJ.</p>{% endif %}
+"""
+
+_NOVO_TENANT_TEMPLATE = """
+<!doctype html>
+<title>Cadastrar escritório</title>
+<h1>Cadastrar novo escritório</h1>
+<p><a href="/tenants">&larr; voltar pra lista</a></p>
+{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
+<form method="post" enctype="multipart/form-data">
+  <p><label>Nome do escritório<br><input type="text" name="nome" required value="{{ nome or '' }}"></label></p>
+  <p><label>WhatsApp de contato (opcional)<br><input type="text" name="whatsapp" placeholder="5511999999999" value="{{ whatsapp or '' }}"></label></p>
+  <p><label>Plano (opcional)<br><input type="text" name="plano" value="{{ plano or '' }}"></label></p>
+  <p><label>Carteira de CNPJs — CSV (opcional, pode importar depois)<br>
+     <input type="file" name="carteira" accept=".csv"><br>
+     <small>colunas: cnpj,razao_social,nome_fantasia,regime_tributario</small></label></p>
+  <button type="submit">Cadastrar</button>
+</form>
+"""
+
+_TENANT_CRIADO_TEMPLATE = """
+<!doctype html>
+<title>Escritório cadastrado</title>
+<h1>Escritório cadastrado: {{ tenant.nome }}</h1>
+<p>Link de acesso pra esse escritório (guarde/envie com cuidado — dá acesso à carteira dele):</p>
+<p><code>{{ link }}</code></p>
+{% if resultado_carteira %}<p>Carteira: {{ resultado_carteira }}</p>{% endif %}
+<p><a href="/tenants">&larr; voltar pra lista</a> · <a href="{{ link }}">ver a carteira deste escritório</a></p>
 """
 
 _PRE_ANALISE_FORM_TEMPLATE = """
@@ -235,6 +265,44 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
     @app.get("/privacidade")
     def privacidade():
         return render_template_string(_PRIVACIDADE_TEMPLATE, hoje=date.today().strftime("%d/%m/%Y"))
+
+    @app.route("/admin/tenants/novo", methods=["GET", "POST"])
+    def novo_tenant():
+        unauthorized = _require_admin()
+        if unauthorized:
+            return unauthorized
+
+        if request.method == "GET":
+            return render_template_string(_NOVO_TENANT_TEMPLATE)
+
+        nome = (request.form.get("nome") or "").strip()
+        whatsapp = (request.form.get("whatsapp") or "").strip() or None
+        plano = (request.form.get("plano") or "").strip() or None
+
+        if not nome:
+            return (
+                render_template_string(
+                    _NOVO_TENANT_TEMPLATE, erro="Nome do escritório é obrigatório.",
+                    whatsapp=whatsapp, plano=plano,
+                ),
+                400,
+            )
+
+        conn = _connect()
+        tenant = storage.create_tenant(conn, nome, contato_whatsapp=whatsapp, plano=plano)
+
+        resultado_carteira = None
+        carteira_file = request.files.get("carteira")
+        if carteira_file and carteira_file.filename:
+            stream = io.StringIO(carteira_file.stream.read().decode("utf-8"))
+            count, erro_carteira = import_portfolio_csv(conn, tenant.id, stream)
+            resultado_carteira = erro_carteira or f"{count} CNPJ(s) importado(s)."
+        conn.close()
+
+        link = f"/tenants/{tenant.id}?token={tenant.acesso_token}"
+        return render_template_string(
+            _TENANT_CRIADO_TEMPLATE, tenant=tenant, link=link, resultado_carteira=resultado_carteira
+        )
 
     @app.route("/pre-analise", methods=["GET", "POST"])
     def pre_analise():

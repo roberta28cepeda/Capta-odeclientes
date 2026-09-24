@@ -132,3 +132,37 @@ class SerproIntegraContadorProvider:
             "e certificado digital do escritório. Use ManualFiscalProvider "
             "enquanto isso. Ver README.md."
         )
+
+
+def import_portfolio_csv(conn, tenant_id: int, csv_file) -> tuple[int, str | None]:
+    """Importa a carteira de CNPJs de um arquivo CSV já aberto
+    (colunas: cnpj,razao_social,nome_fantasia,regime_tributario).
+
+    Compartilhado entre o CLI (`--import-portfolio`) e o formulário web de
+    cadastro de escritório, pra não duplicar a validação. Retorna
+    (quantidade importada, mensagem de erro ou None — para na primeira
+    linha inválida, sem importar o resto).
+    """
+    from src.fiscal_monitor import storage
+
+    count = 0
+    for row in csv.DictReader(csv_file):
+        cnpj = (row.get("cnpj") or "").strip()
+        if not cnpj:
+            continue
+        regime = (row.get("regime_tributario") or "").strip().lower() or None
+        if regime is not None and regime not in storage.REGIMES_TRIBUTARIOS:
+            return count, (
+                f"regime_tributario '{regime}' inválido pro CNPJ {cnpj} — "
+                f"use um de {sorted(storage.REGIMES_TRIBUTARIOS)}."
+            )
+        storage.upsert_cnpj(
+            conn,
+            tenant_id,
+            cnpj,
+            razao_social=(row.get("razao_social") or "").strip() or None,
+            nome_fantasia=(row.get("nome_fantasia") or "").strip() or None,
+            regime_tributario=regime,
+        )
+        count += 1
+    return count, None
