@@ -18,6 +18,7 @@ class Tenant:
     plano: str | None
     criado_em: str
     acesso_token: str = ""
+    contato_email: str | None = None
 
 
 @dataclass

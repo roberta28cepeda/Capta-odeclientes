@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     contato_whatsapp TEXT,
     plano TEXT,
     criado_em TEXT NOT NULL,
-    acesso_token TEXT NOT NULL DEFAULT ''
+    acesso_token TEXT NOT NULL DEFAULT '',
+    contato_email TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cnpjs (
@@ -95,6 +96,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     except sqlite3.OperationalError:
         pass  # coluna já existe
 
+    try:
+        conn.execute("ALTER TABLE tenants ADD COLUMN contato_email TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # coluna já existe
+
     # Bancos antigos ganham token vazio pela migração acima — gera um de verdade
     # pra cada tenant que ainda não tem, senão o dono fica trancado pra fora.
     rows = conn.execute("SELECT id FROM tenants WHERE acesso_token = ''").fetchall()
@@ -105,13 +112,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def create_tenant(
-    conn: sqlite3.Connection, nome: str, contato_whatsapp: str | None = None, plano: str | None = None
+    conn: sqlite3.Connection,
+    nome: str,
+    contato_whatsapp: str | None = None,
+    plano: str | None = None,
+    contato_email: str | None = None,
 ) -> Tenant:
     criado_em = datetime.now(timezone.utc).isoformat()
     acesso_token = secrets.token_urlsafe(24)
     cursor = conn.execute(
-        "INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token) VALUES (?, ?, ?, ?, ?)",
-        (nome, contato_whatsapp, plano, criado_em, acesso_token),
+        """
+        INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email),
     )
     conn.commit()
     return Tenant(
@@ -121,6 +135,7 @@ def create_tenant(
         plano=plano,
         criado_em=criado_em,
         acesso_token=acesso_token,
+        contato_email=contato_email,
     )
 
 
@@ -142,6 +157,7 @@ def _row_to_tenant(row: sqlite3.Row) -> Tenant:
         plano=row["plano"],
         criado_em=row["criado_em"],
         acesso_token=row["acesso_token"],
+        contato_email=row["contato_email"],
     )
 
 

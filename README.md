@@ -320,15 +320,19 @@ use. O sistema cuida do diff, priorização, alerta e dashboard.
 ### Setup adicional
 
 Usa `WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID` do módulo de
-WhatsApp (opcional, só pra `--enviar-whatsapp`). Não precisa de mais nada
-além do `requirements.txt` já instalado — a persistência é SQLite puro
-(stdlib), sem serviço externo.
+WhatsApp (opcional, só pra `--enviar-whatsapp`) e, opcionalmente,
+`SMTP_HOST`/`SMTP_PORT`/`SMTP_USERNAME`/`SMTP_PASSWORD`/`SMTP_FROM` pra
+alerta por e-mail (`--enviar-email`) — o escritório pode receber alerta
+por WhatsApp, e-mail, ou os dois, dependendo do que cadastrar no contato.
+Não precisa de mais nada além do `requirements.txt` já instalado — a
+persistência é SQLite puro (stdlib) local, ou Postgres em produção (ver
+"Deploy no Vercel" abaixo).
 
 ### Uso
 
 ```bash
 # cadastra um escritório (tenant) e sua carteira de CNPJs (com regime tributário)
-python -m src.fiscal_monitor.cli --import-tenant --nome "Escritório X" --whatsapp 5511999999999
+python -m src.fiscal_monitor.cli --import-tenant --nome "Escritório X" --whatsapp 5511999999999 --email contato@escritorio.com.br
 python -m src.fiscal_monitor.cli --import-portfolio --tenant-id 1 --csv carteira.csv
 
 # importa achados fiscais (cnpj,esfera,tipo,descricao,valor,vencimento,pago)
@@ -338,9 +342,9 @@ python -m src.fiscal_monitor.cli --import-snapshot --tenant-id 1 --csv snapshot_
 # importa faturamento mensal (cnpj,competencia,valor) — usado no sublimite do Simples
 python -m src.fiscal_monitor.cli --import-faturamento --tenant-id 1 --csv faturamento.csv
 
-# roda o motor de alertas (achados + sublimite do Simples), opcionalmente gerando PDF e enviando por WhatsApp
+# roda o motor de alertas (achados + sublimite do Simples), opcionalmente gerando PDF e enviando por WhatsApp/e-mail
 python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5 --referencia 2026-09
-python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp
+python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp --enviar-email
 
 # dashboard web (tenants, carteira com regime, sublimite, achados em aberto e histórico por CNPJ)
 python -m src.fiscal_monitor.cli --serve --port 8090
@@ -349,6 +353,11 @@ python -m src.fiscal_monitor.cli --serve --port 8090
 Veja `examples/fiscal_monitor_carteira_exemplo.csv`,
 `examples/fiscal_monitor_snapshot_exemplo.csv` e
 `examples/fiscal_monitor_faturamento_exemplo.csv` para o formato esperado.
+
+**Cadastro de escritório também dá pra fazer pelo navegador**, sem
+terminal: com login de admin (`ADMIN_USERNAME`/`ADMIN_PASSWORD`), acesse
+`/admin/tenants/novo` no dashboard — formulário com nome, WhatsApp,
+e-mail, plano e upload direto da carteira em CSV.
 
 ### Testes
 

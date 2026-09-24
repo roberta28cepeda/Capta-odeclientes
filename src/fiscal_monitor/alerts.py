@@ -1,9 +1,10 @@
-"""Monta o resumo de alertas fiscais e dispara pro contato de WhatsApp do
-tenant, reusando o mesmo client do módulo `whatsapp`.
+"""Monta o resumo de alertas fiscais e dispara pro contato do tenant, via
+WhatsApp (reusando o client do módulo `whatsapp`) ou e-mail.
 """
 
 from __future__ import annotations
 
+from src.fiscal_monitor.email_client import send_email
 from src.fiscal_monitor.monitor import SUBLIMITE_SIMPLES, TETO_SIMPLES, AlertItem, SublimiteAlertItem
 from src.fiscal_monitor.storage import Tenant
 from src.whatsapp.client import send_pdf, send_text_message
@@ -80,3 +81,25 @@ def send_whatsapp_report(tenant: Tenant, pdf_path: str, phone_number_id: str, ac
         return None
     caption = f"Relatório fiscal — {tenant.nome}"
     return send_pdf(pdf_path, tenant.contato_whatsapp, phone_number_id, access_token, caption=caption)
+
+
+def send_email_alert(
+    tenant: Tenant,
+    alerts: list[AlertItem],
+    smtp_host: str,
+    smtp_port: int,
+    smtp_username: str,
+    smtp_password: str,
+    smtp_from: str | None = None,
+) -> bool:
+    """Envia o resumo de alertas por e-mail pro contato do tenant.
+
+    Retorna False (sem enviar nada) se o tenant não tem e-mail cadastrado
+    ou se não há alertas.
+    """
+    if not tenant.contato_email or not alerts:
+        return False
+    subject = f"[Monitoramento Fiscal] {len(alerts)} alerta(s) para {tenant.nome}"
+    body = format_alerts_summary(tenant, alerts)
+    send_email(tenant.contato_email, subject, body, smtp_host, smtp_port, smtp_username, smtp_password, smtp_from)
+    return True

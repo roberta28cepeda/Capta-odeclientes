@@ -124,6 +124,7 @@ _NOVO_TENANT_TEMPLATE = """
 <form method="post" enctype="multipart/form-data">
   <p><label>Nome do escritório<br><input type="text" name="nome" required value="{{ nome or '' }}"></label></p>
   <p><label>WhatsApp de contato (opcional)<br><input type="text" name="whatsapp" placeholder="5511999999999" value="{{ whatsapp or '' }}"></label></p>
+  <p><label>E-mail de contato (opcional)<br><input type="email" name="email" value="{{ email or '' }}"></label></p>
   <p><label>Plano (opcional)<br><input type="text" name="plano" value="{{ plano or '' }}"></label></p>
   <p><label>Carteira de CNPJs — CSV (opcional, pode importar depois)<br>
      <input type="file" name="carteira" accept=".csv"><br>
@@ -277,19 +278,20 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
 
         nome = (request.form.get("nome") or "").strip()
         whatsapp = (request.form.get("whatsapp") or "").strip() or None
+        email = (request.form.get("email") or "").strip() or None
         plano = (request.form.get("plano") or "").strip() or None
 
         if not nome:
             return (
                 render_template_string(
                     _NOVO_TENANT_TEMPLATE, erro="Nome do escritório é obrigatório.",
-                    whatsapp=whatsapp, plano=plano,
+                    whatsapp=whatsapp, email=email, plano=plano,
                 ),
                 400,
             )
 
         conn = _connect()
-        tenant = storage.create_tenant(conn, nome, contato_whatsapp=whatsapp, plano=plano)
+        tenant = storage.create_tenant(conn, nome, contato_whatsapp=whatsapp, plano=plano, contato_email=email)
 
         resultado_carteira = None
         carteira_file = request.files.get("carteira")

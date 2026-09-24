@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     contato_whatsapp TEXT,
     plano TEXT,
     criado_em TEXT NOT NULL,
-    acesso_token TEXT NOT NULL DEFAULT ''
+    acesso_token TEXT NOT NULL DEFAULT '',
+    contato_email TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cnpjs (
@@ -98,6 +99,7 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
         with conn.cursor() as cur:
             cur.execute(SCHEMA)
             cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS acesso_token TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS contato_email TEXT")
             cur.execute(
                 "UPDATE tenants SET acesso_token = md5(random()::text || id::text) WHERE acesso_token = ''"
             )
@@ -106,22 +108,33 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
     return conn
 
 
-def create_tenant(conn, nome: str, contato_whatsapp: str | None = None, plano: str | None = None) -> Tenant:
+def create_tenant(
+    conn,
+    nome: str,
+    contato_whatsapp: str | None = None,
+    plano: str | None = None,
+    contato_email: str | None = None,
+) -> Tenant:
     criado_em = datetime.now(timezone.utc).isoformat()
     acesso_token = secrets.token_urlsafe(24)
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token)
-            VALUES (%s, %s, %s, %s, %s) RETURNING id
+            INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
             """,
-            (nome, contato_whatsapp, plano, criado_em, acesso_token),
+            (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email),
         )
         tenant_id = cur.fetchone()["id"]
     conn.commit()
     return Tenant(
-        id=tenant_id, nome=nome, contato_whatsapp=contato_whatsapp, plano=plano, criado_em=criado_em,
+        id=tenant_id,
+        nome=nome,
+        contato_whatsapp=contato_whatsapp,
+        plano=plano,
+        criado_em=criado_em,
         acesso_token=acesso_token,
+        contato_email=contato_email,
     )
 
 
@@ -147,6 +160,7 @@ def _row_to_tenant(row) -> Tenant:
         plano=row["plano"],
         criado_em=row["criado_em"],
         acesso_token=row["acesso_token"],
+        contato_email=row["contato_email"],
     )
 
 

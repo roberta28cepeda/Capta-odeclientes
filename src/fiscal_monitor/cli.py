@@ -6,12 +6,12 @@ um CSV (export manual do e-CAC, ou de um scraper que o escritório já use).
 Veja README.md para o porquê e o que falta pra integração real.
 
 Uso:
-    python -m src.fiscal_monitor.cli --import-tenant --nome "Escritório X" --whatsapp 5511999999999
+    python -m src.fiscal_monitor.cli --import-tenant --nome "Escritório X" --whatsapp 5511999999999 --email contato@escritorio.com
     python -m src.fiscal_monitor.cli --import-portfolio --tenant-id 1 --csv carteira.csv
     python -m src.fiscal_monitor.cli --import-snapshot --tenant-id 1 --csv snapshot_ecac.csv
     python -m src.fiscal_monitor.cli --import-faturamento --tenant-id 1 --csv faturamento.csv
     python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5
-    python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp
+    python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp --enviar-email
     python -m src.fiscal_monitor.cli --serve --port 8090
 
     # pré-análise pública (só CNPJ, sem procuração/e-CAC) — ferramenta de pré-venda
@@ -55,6 +55,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tenant-id", type=int, help="ID do tenant (obrigatório exceto em --import-tenant)")
     parser.add_argument("--nome", help="Nome do escritório, para --import-tenant")
     parser.add_argument("--whatsapp", help="Contato de WhatsApp do escritório, formato internacional")
+    parser.add_argument("--email", help="Contato de e-mail do escritório, para --import-tenant")
     parser.add_argument("--plano", help="Plano/tier do tenant, para --import-tenant")
     parser.add_argument("--csv", help="Caminho do CSV, para --import-portfolio/--import-snapshot")
     parser.add_argument(
@@ -74,6 +75,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--enviar-whatsapp",
         action="store_true",
         help="Em --check, envia o resumo (ou o PDF, se --pdf) por WhatsApp ao contato do tenant",
+    )
+    parser.add_argument(
+        "--enviar-email",
+        action="store_true",
+        help="Em --check, envia o resumo de alertas por e-mail ao contato do tenant (requer SMTP_* no .env)",
     )
     parser.add_argument("--host", default="127.0.0.1", help="Host do dashboard (--serve)")
     parser.add_argument("--port", type=int, default=8090, help="Porta do dashboard (--serve)")
@@ -106,7 +112,9 @@ def main(argv: list[str] | None = None) -> int:
         if not _require(args.nome, "--nome"):
             return 1
         conn = storage.connect(args.db_path)
-        tenant = storage.create_tenant(conn, args.nome, contato_whatsapp=args.whatsapp, plano=args.plano)
+        tenant = storage.create_tenant(
+            conn, args.nome, contato_whatsapp=args.whatsapp, plano=args.plano, contato_email=args.email
+        )
         conn.close()
         print(f"Tenant criado: id={tenant.id} nome={tenant.nome}")
         print(
@@ -238,6 +246,28 @@ def main(argv: list[str] | None = None) -> int:
                 print("Nada enviado (tenant sem WhatsApp cadastrado, ou nenhum alerta novo).")
             else:
                 print("Enviado por WhatsApp.")
+
+        if args.enviar_email:
+            smtp_host = os.environ.get("SMTP_HOST")
+            smtp_port = os.environ.get("SMTP_PORT")
+            smtp_username = os.environ.get("SMTP_USERNAME")
+            smtp_password = os.environ.get("SMTP_PASSWORD")
+            if not all([smtp_host, smtp_port, smtp_username, smtp_password]):
+                print(
+                    "Defina SMTP_HOST, SMTP_PORT, SMTP_USERNAME e SMTP_PASSWORD no .env para --enviar-email.",
+                    file=sys.stderr,
+                )
+                return 1
+            enviado = alerts.send_email_alert(
+                tenant,
+                alert_items,
+                smtp_host,
+                int(smtp_port),
+                smtp_username,
+                smtp_password,
+                smtp_from=os.environ.get("SMTP_FROM"),
+            )
+            print("Enviado por e-mail." if enviado else "Nada enviado (tenant sem e-mail cadastrado, ou nenhum alerta novo).")
         return 0
 
     if args.serve:

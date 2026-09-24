@@ -4,6 +4,10 @@ from src.fiscal_monitor import alerts, monitor, storage
 
 TENANT_COM_WHATSAPP = storage.Tenant(id=1, nome="Escritório A", contato_whatsapp="5511999999999", plano=None, criado_em="")
 TENANT_SEM_WHATSAPP = storage.Tenant(id=2, nome="Escritório B", contato_whatsapp=None, plano=None, criado_em="")
+TENANT_COM_EMAIL = storage.Tenant(
+    id=3, nome="Escritório C", contato_whatsapp=None, plano=None, criado_em="", contato_email="cliente@exemplo.com"
+)
+TENANT_SEM_EMAIL = storage.Tenant(id=4, nome="Escritório D", contato_whatsapp=None, plano=None, criado_em="")
 
 CNPJ = storage.Cnpj(id=1, tenant_id=1, cnpj="11.222.333/0001-44", razao_social="Contábil Exemplo", nome_fantasia=None, ativo=True)
 FINDING = storage.Finding(1, 1, "federal", "das", "DAS 08/2026", 412.5, "2026-09-25", False, "nova")
@@ -83,3 +87,30 @@ def test_format_sublimite_summary_handles_empty_list():
 def test_format_sublimite_summary_counts_items():
     summary = alerts.format_sublimite_summary(TENANT_COM_WHATSAPP, [SUBLIMITE_ITEM])
     assert summary.startswith("1 CNPJ(s)")
+
+
+def test_send_email_alert_returns_false_without_contact():
+    assert alerts.send_email_alert(TENANT_SEM_EMAIL, [ALERT], "smtp.exemplo.com", 587, "user", "pass") is False
+
+
+def test_send_email_alert_returns_false_without_alerts():
+    assert alerts.send_email_alert(TENANT_COM_EMAIL, [], "smtp.exemplo.com", 587, "user", "pass") is False
+
+
+def test_send_email_alert_sends_when_contact_and_alerts_exist():
+    with patch("src.fiscal_monitor.alerts.send_email") as mock_send:
+        result = alerts.send_email_alert(
+            TENANT_COM_EMAIL, [ALERT], "smtp.exemplo.com", 587, "user", "pass", smtp_from="alertas@leactis.com.br"
+        )
+
+    assert result is True
+    mock_send.assert_called_once_with(
+        "cliente@exemplo.com",
+        "[Monitoramento Fiscal] 1 alerta(s) para Escritório C",
+        alerts.format_alerts_summary(TENANT_COM_EMAIL, [ALERT]),
+        "smtp.exemplo.com",
+        587,
+        "user",
+        "pass",
+        "alertas@leactis.com.br",
+    )
