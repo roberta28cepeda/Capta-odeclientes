@@ -60,8 +60,19 @@ constituída) e **tier** (A ≥R$500 mil, B R$100-500 mil, C R$20-100 mil, D
 fração pequena das empresas concentra a maior parte da dívida, priorize
 por aí.
 
-A lista da PGFN **não inclui e-mail nem telefone** — falta enriquecer
-contato antes de abordar (não implementado aqui ainda).
+A lista da PGFN **não inclui e-mail nem telefone**. Use `--enrich-contato`
+pra buscar o telefone público de cada CNPJ (o mesmo cadastrado na Receita
+Federal, via BrasilAPI — a mesma consulta usada na Pré-Análise Fiscal do
+módulo `fiscal_monitor`):
+
+```bash
+python -m src.prospecting.pgfn_cli --csv devedores.csv --enrich-contato
+```
+
+Isso não é um enriquecimento comercial completo (não traz e-mail, não é
+opt-in de marketing) — é só o telefone público, melhor que sair sem
+contato nenhum. Um CNPJ não encontrado ou fora do ar fica sem telefone,
+sem travar o resto da lista.
 
 ### Testes
 

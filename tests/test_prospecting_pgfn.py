@@ -1,12 +1,15 @@
 import os
 import tempfile
+from unittest.mock import patch
 
 import pytest
 
+from src.fiscal_monitor.preanalise import ConsultaCnpjError
 from src.prospecting.pgfn import (
     PgfnDebtor,
     assign_tier,
     classify_registro,
+    enrich_with_public_contact,
     pareto_concentration,
     parse_brl_number,
     parse_pgfn_csv,
@@ -140,3 +143,45 @@ def test_pareto_concentration_for_tier_a():
 
 def test_pareto_concentration_handles_empty_list():
     assert pareto_concentration([], tier="A") == (0.0, 0.0)
+
+
+def test_enrich_with_public_contact_fills_telefone_from_ddd1():
+    debtors = [PgfnDebtor("1", "A LTDA", None, 800_000.0, 800_000.0, "empresa constituída", "A")]
+
+    with patch(
+        "src.fiscal_monitor.preanalise.consultar_cnpj_publico",
+        return_value={"ddd_telefone_1": "(11) 4002-8922", "ddd_telefone_2": ""},
+    ):
+        enrich_with_public_contact(debtors)
+
+    assert debtors[0].telefone == "(11) 4002-8922"
+
+
+def test_enrich_with_public_contact_falls_back_to_ddd2():
+    debtors = [PgfnDebtor("1", "A LTDA", None, 800_000.0, 800_000.0, "empresa constituída", "A")]
+
+    with patch(
+        "src.fiscal_monitor.preanalise.consultar_cnpj_publico",
+        return_value={"ddd_telefone_1": "", "ddd_telefone_2": "(21) 3003-1234"},
+    ):
+        enrich_with_public_contact(debtors)
+
+    assert debtors[0].telefone == "(21) 3003-1234"
+
+
+def test_enrich_with_public_contact_skips_debtor_on_consulta_error():
+    debtors = [
+        PgfnDebtor("1", "A LTDA", None, 800_000.0, 800_000.0, "empresa constituída", "A"),
+        PgfnDebtor("2", "B LTDA", None, 150_000.0, 150_000.0, "empresa constituída", "B"),
+    ]
+
+    def fake_consulta(cnpj, session=None):
+        if cnpj == "1":
+            raise ConsultaCnpjError("CNPJ 1 não encontrado.")
+        return {"ddd_telefone_1": "(31) 3222-1000"}
+
+    with patch("src.fiscal_monitor.preanalise.consultar_cnpj_publico", side_effect=fake_consulta):
+        enrich_with_public_contact(debtors)
+
+    assert debtors[0].telefone is None
+    assert debtors[1].telefone == "(31) 3222-1000"

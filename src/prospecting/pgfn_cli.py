@@ -12,6 +12,7 @@ import sys
 
 from src.prospecting.pgfn import (
     TIER_LABELS,
+    enrich_with_public_contact,
     pareto_concentration,
     parse_pgfn_csv,
     summarize_by_tier,
@@ -25,6 +26,7 @@ CSV_FIELDS = [
     "valor_total",
     "tipo_registro",
     "tier",
+    "telefone",
 ]
 
 
@@ -38,6 +40,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--encoding",
         default="latin-1",
         help="Encoding do arquivo de entrada (a PGFN exporta em ISO-8859-1/latin-1)",
+    )
+    parser.add_argument(
+        "--enrich-contato",
+        action="store_true",
+        help="Busca o telefone público de cada CNPJ na BrasilAPI antes de salvar (mesma consulta da pré-análise fiscal)",
     )
     return parser.parse_args(argv)
 
@@ -55,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
         print("Nenhum devedor encontrado no arquivo.", file=sys.stderr)
         return 1
 
+    if args.enrich_contato:
+        print(f"Consultando telefone público de {len(debtors)} CNPJ(s) na BrasilAPI...")
+        enrich_with_public_contact(debtors)
+        com_telefone = sum(1 for d in debtors if d.telefone)
+        print(f"{com_telefone}/{len(debtors)} encontrados com telefone público.\n")
+
     with open(args.output, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
@@ -68,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
                     "valor_total": f"{debtor.valor_total:.2f}",
                     "tipo_registro": debtor.tipo_registro,
                     "tier": debtor.tier,
+                    "telefone": debtor.telefone or "",
                 }
             )
 

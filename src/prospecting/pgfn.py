@@ -12,6 +12,8 @@ import csv
 import re
 from dataclasses import dataclass
 
+import requests
+
 HEADER_MARKER = "CPF/CNPJ"
 
 # (tier, minimum valor_selecionado to qualify) — first match wins, in order.
@@ -44,6 +46,7 @@ class PgfnDebtor:
     valor_total: float
     tipo_registro: str
     tier: str
+    telefone: str | None = None
 
 
 def parse_brl_number(value: str) -> float:
@@ -121,6 +124,36 @@ def summarize_by_tier(debtors: list[PgfnDebtor]) -> dict[str, dict]:
         summary[debtor.tier]["count"] += 1
         summary[debtor.tier]["total_valor"] += debtor.valor_selecionado
     return summary
+
+
+def _extrair_telefone(dados: dict) -> str | None:
+    ddd1 = (dados.get("ddd_telefone_1") or "").strip()
+    if ddd1:
+        return ddd1
+    ddd2 = (dados.get("ddd_telefone_2") or "").strip()
+    return ddd2 or None
+
+
+def enrich_with_public_contact(
+    debtors: list[PgfnDebtor], session: requests.Session | None = None
+) -> list[PgfnDebtor]:
+    """Preenche o telefone público (cadastrado na Receita Federal) de cada devedor.
+
+    A lista da PGFN não traz contato — isso não é um enriquecimento
+    comercial completo (não tem e-mail, não é opt-in de marketing), mas o
+    telefone público via BrasilAPI já é melhor que sair sem contato nenhum.
+    Consulta um CNPJ por vez; CNPJ não encontrado ou erro de consulta é
+    pulado silenciosamente (fica sem telefone), sem travar o resto da lista.
+    """
+    from src.fiscal_monitor.preanalise import ConsultaCnpjError, consultar_cnpj_publico
+
+    for debtor in debtors:
+        try:
+            dados = consultar_cnpj_publico(debtor.cnpj, session=session)
+        except ConsultaCnpjError:
+            continue
+        debtor.telefone = _extrair_telefone(dados)
+    return debtors
 
 
 def pareto_concentration(debtors: list[PgfnDebtor], tier: str = "A") -> tuple[float, float]:
