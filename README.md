@@ -391,6 +391,28 @@ outros módulos (`prospecting`, `proposals`, `whatsapp`, etc.) continuam
 sendo CLI local — só o `fiscal_monitor` tem essa camada web pensada pra
 hospedagem.
 
+### Checagem automática agendada (cron)
+
+Sem isso, alguém precisa lembrar de rodar `--check --enviar-whatsapp
+--enviar-email` pra cada tenant manualmente. Com `CRON_SECRET` definido
+no ambiente, o dashboard expõe `POST /cron/check-all`, que roda o motor
+de alertas (achados + sublimite do Simples) pra **todos** os escritórios
+cadastrados de uma vez e dispara WhatsApp/e-mail pra quem tiver contato e
+credenciais configuradas — erro num tenant não trava a checagem dos
+demais.
+
+No Vercel, `vercel.json` já declara o cron (`0 8 * * *` — todo dia às 8h
+UTC); o Vercel injeta sozinho o header `Authorization: Bearer
+$CRON_SECRET` na chamada, então só falta configurar a variável
+`CRON_SECRET` no projeto. **Atenção:** no plano Hobby do Vercel, cron job
+só roda no máximo uma vez por dia — pra checagem mais frequente é preciso
+plano Pro, ou chamar o endpoint por um scheduler externo (`?secret=...`
+na query string, pra quem não manda o header Authorization).
+
+Esse endpoint não importa snapshot novo — só roda o alerta sobre o que já
+foi importado (igual `--check` no CLI); a importação de achados
+(`--import-snapshot`) continua manual/via scraper próprio do escritório.
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |

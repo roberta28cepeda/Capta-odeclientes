@@ -15,6 +15,7 @@ from datetime import date
 from flask import Flask, Response, after_this_request, jsonify, render_template_string, request, send_file
 
 from src.fiscal_monitor import monitor, storage
+from src.fiscal_monitor.cron import check_all_tenants
 from src.fiscal_monitor.pdf import render_pre_analise_pdf
 from src.fiscal_monitor.preanalise import (
     ConsultaCnpjError,
@@ -253,6 +254,21 @@ def _tenant_authorized(tenant: storage.Tenant) -> bool:
     return bool(tenant.acesso_token) and secrets.compare_digest(token, tenant.acesso_token)
 
 
+def _cron_authorized() -> bool:
+    """Protege /cron/check-all: só aceita chamada com o CRON_SECRET certo,
+    seja no header Authorization (formato que o Vercel Cron manda sozinho
+    quando CRON_SECRET está configurado no projeto) ou em ?secret=... (pra
+    schedulers externos). Sem CRON_SECRET configurado, o acesso é negado.
+    """
+    secret = os.environ.get("CRON_SECRET")
+    if not secret:
+        return False
+    auth_header = request.headers.get("Authorization", "")
+    if secrets.compare_digest(auth_header, f"Bearer {secret}"):
+        return True
+    return secrets.compare_digest(request.args.get("secret", ""), secret)
+
+
 def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
     app = Flask(__name__)
 
@@ -262,6 +278,15 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
     @app.get("/health")
     def health():
         return jsonify({"status": "ok"})
+
+    @app.route("/cron/check-all", methods=["GET", "POST"])
+    def cron_check_all():
+        if not _cron_authorized():
+            return jsonify({"error": "não autorizado — CRON_SECRET ausente ou incorreto"}), 401
+        conn = _connect()
+        resultados = check_all_tenants(conn)
+        conn.close()
+        return jsonify({"tenants_verificados": len(resultados), "resultados": resultados})
 
     @app.get("/privacidade")
     def privacidade():

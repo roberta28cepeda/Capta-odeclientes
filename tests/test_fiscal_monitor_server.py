@@ -291,6 +291,34 @@ def test_cnpj_history_returns_404_for_cnpj_of_another_tenant(app, db_path):
     assert response.status_code == 404
 
 
+def test_cron_check_all_requires_secret(app):
+    response = app.test_client().get("/cron/check-all")
+    assert response.status_code == 401
+
+
+def test_cron_check_all_rejects_wrong_secret(app, monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "segredo-certo")
+    response = app.test_client().get("/cron/check-all?secret=errado")
+    assert response.status_code == 401
+
+
+def test_cron_check_all_accepts_query_secret(app, monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "segredo-certo")
+    response = app.test_client().get("/cron/check-all?secret=segredo-certo")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["tenants_verificados"] == 1
+    assert data["resultados"][0]["alertas"] == 1
+
+
+def test_cron_check_all_accepts_bearer_header(app, monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "segredo-certo")
+    response = app.test_client().get(
+        "/cron/check-all", headers={"Authorization": "Bearer segredo-certo"}
+    )
+    assert response.status_code == 200
+
+
 def test_tenant_cannot_access_another_tenants_data_with_own_token(db_path):
     conn = storage.connect(db_path)
     tenant_a = storage.create_tenant(conn, "Escritório A")
