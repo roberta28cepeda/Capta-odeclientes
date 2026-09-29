@@ -14,6 +14,7 @@ from datetime import date
 
 from flask import Flask, Response, after_this_request, jsonify, render_template_string, request, send_file
 
+from src.common.webauth import admin_authenticated, cron_authorized, require_admin
 from src.fiscal_monitor import monitor, storage
 from src.fiscal_monitor.cron import check_all_tenants
 from src.fiscal_monitor.pdf import render_pre_analise_pdf
@@ -33,6 +34,7 @@ _TENANTS_TEMPLATE = """
 <h1>Escritórios monitorados</h1>
 <p><a href="/admin/tenants/novo">+ Cadastrar novo escritório</a></p>
 <p><a href="/pre-analise">Gerar pré-análise pública (só CNPJ, sem procuração) &rarr;</a></p>
+<p><a href="/admin/campanhas/leads">Campanha de prospecção PGFN (leads, templates) &rarr;</a></p>
 <p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
@@ -218,59 +220,23 @@ dados, escreva para <a href="mailto:contato@leactis.com.br">contato@leactis.com.
 """
 
 
-def _admin_authenticated() -> bool:
-    """`/tenants` (lista com todos os escritórios) só é visível pra quem
-    conhece a senha de administrador — sem ADMIN_PASSWORD configurada, o
-    acesso é negado por padrão (não liberado).
-    """
-    admin_password = os.environ.get("ADMIN_PASSWORD")
-    if not admin_password:
-        return False
-    admin_username = os.environ.get("ADMIN_USERNAME", "admin")
-    auth = request.authorization
-    if not auth:
-        return False
-    return secrets.compare_digest(auth.username or "", admin_username) and secrets.compare_digest(
-        auth.password or "", admin_password
-    )
-
-
-def _require_admin() -> Response | None:
-    if _admin_authenticated():
-        return None
-    return Response(
-        "Autenticação necessária.", 401, {"WWW-Authenticate": 'Basic realm="Monitoramento Fiscal"'}
-    )
-
-
 def _tenant_authorized(tenant: storage.Tenant) -> bool:
     """Acesso à carteira de um tenant: senha de admin, ou o token de acesso
     daquele tenant específico (`?token=...`) — cada escritório só entra na
     própria carteira, não na dos outros.
     """
-    if _admin_authenticated():
+    if admin_authenticated():
         return True
     token = request.args.get("token", "")
     return bool(tenant.acesso_token) and secrets.compare_digest(token, tenant.acesso_token)
 
 
-def _cron_authorized() -> bool:
-    """Protege /cron/check-all: só aceita chamada com o CRON_SECRET certo,
-    seja no header Authorization (formato que o Vercel Cron manda sozinho
-    quando CRON_SECRET está configurado no projeto) ou em ?secret=... (pra
-    schedulers externos). Sem CRON_SECRET configurado, o acesso é negado.
-    """
-    secret = os.environ.get("CRON_SECRET")
-    if not secret:
-        return False
-    auth_header = request.headers.get("Authorization", "")
-    if secrets.compare_digest(auth_header, f"Bearer {secret}"):
-        return True
-    return secrets.compare_digest(request.args.get("secret", ""), secret)
-
-
-def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
+def create_app(
+    db_path: str = storage.DEFAULT_DB_PATH,
+    campaigns_db_path: str | None = None,
+) -> Flask:
     app = Flask(__name__)
+    app.config["CAMPAIGNS_DB_PATH"] = campaigns_db_path
 
     def _connect() -> sqlite3.Connection:
         return storage.connect(db_path)
@@ -281,7 +247,7 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
 
     @app.route("/cron/check-all", methods=["GET", "POST"])
     def cron_check_all():
-        if not _cron_authorized():
+        if not cron_authorized():
             return jsonify({"error": "não autorizado — CRON_SECRET ausente ou incorreto"}), 401
         conn = _connect()
         resultados = check_all_tenants(conn)
@@ -294,7 +260,7 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
 
     @app.route("/admin/tenants/novo", methods=["GET", "POST"])
     def novo_tenant():
-        unauthorized = _require_admin()
+        unauthorized = require_admin()
         if unauthorized:
             return unauthorized
 
@@ -389,7 +355,7 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
 
     @app.get("/tenants")
     def tenants_list():
-        unauthorized = _require_admin()
+        unauthorized = require_admin()
         if unauthorized:
             return unauthorized
         conn = _connect()
@@ -463,6 +429,10 @@ def create_app(db_path: str = storage.DEFAULT_DB_PATH) -> Flask:
                 for cnpj, finding in findings
             ]
         )
+
+    from src.campaigns.routes import bp as campaigns_bp
+
+    app.register_blueprint(campaigns_bp)
 
     return app
 

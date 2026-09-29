@@ -413,6 +413,67 @@ Esse endpoint não importa snapshot novo — só roda o alerta sobre o que já
 foi importado (igual `--check` no CLI); a importação de achados
 (`--import-snapshot`) continua manual/via scraper próprio do escritório.
 
+## Módulo: Campanha de Prospecção (PGFN)
+
+Automação de e-mail frio pra lista de devedores da PGFN — separado do
+`fiscal_monitor` (que é o produto vendido pra escritórios contábeis; isso
+aqui é ferramenta de prospecção interna da Leactis), mas hospedado no
+mesmo app Flask/projeto Vercel, reaproveitando o mesmo Postgres e SMTP já
+configurados.
+
+Fluxo: importa uma lista de CNPJs (ex: saída do `prospecting.pgfn_cli`) →
+busca o e-mail de cada empresa via Google (quando ainda não tem) → manda
+um e-mail inicial → manda até 3 follow-ups, um a cada 3 dias, pros que não
+converteram → registra abertura (pixel invisível) e clique (link
+redirecionado) de cada envio → manda um relatório por e-mail toda
+segunda-feira com esses números da semana anterior.
+
+### Setup
+
+Além do SMTP (mesmas variáveis do `fiscal_monitor`, ver acima), a busca
+de e-mail usa a **Custom Search JSON API** do Google — diferente da
+`GOOGLE_PLACES_API_KEY` do módulo `prospecting`:
+
+1. Crie um mecanismo em [programmablesearchengine.google.com](https://programmablesearchengine.google.com/controlpanel/create),
+   ative "Pesquisar toda a Web" nas configurações básicas, e copie o
+   **Search engine ID** → `GOOGLE_SEARCH_ENGINE_ID`.
+2. Ative a "Custom Search API" no Google Cloud Console e crie uma chave
+   de API → `GOOGLE_SEARCH_API_KEY`.
+3. **100 buscas grátis por dia**, ~US$5 a cada 1.000 acima disso (teto de
+   10.000/dia) — cada CNPJ sem e-mail cadastrado gasta 1 busca. Pra um
+   volume de até 100 leads novos/dia, fica de graça.
+
+### Uso (CLI, local)
+
+```bash
+python -m src.campaigns.cli --import-leads --csv leads_pgfn.csv
+python -m src.campaigns.cli --buscar-emails
+python -m src.campaigns.cli --enviar-diario --base-url https://capta-fiscal-monitor.vercel.app
+python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.com.br
+```
+
+### Uso (web, produção)
+
+- `/admin/campanhas/leads` — lista de leads e status de envio (admin).
+- `/admin/campanhas/leads/importar` — importa CSV (`cnpj,razao_social,email`) direto pelo navegador.
+- `/admin/campanhas/templates` — edita assunto/corpo/link de cada tipo de e-mail (inicial + 3 follow-ups). **Os textos padrão são só rascunho** (marcados `[AJUSTAR]`) — edite antes de rodar a campanha de verdade.
+- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): roda o envio do dia pra todo lead pendente, e às segundas-feiras também dispara o relatório semanal pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 9 * * *`, todo dia às 9h UTC).
+
+### O que não faz (por enquanto)
+
+- **Não detecta resposta do lead** pra parar a sequência — os follow-ups
+  seguem o cronograma fixo (3 no total) independente de o lead ter
+  respondido ou não. Parar manualmente significa mudar o `status` do lead
+  pra `pausado` direto no banco (ainda sem botão no dashboard pra isso).
+- **A busca de e-mail é best-effort** — nem toda empresa tem e-mail
+  público achável via busca; CNPJ sem e-mail encontrado fica sem contato
+  (não trava o restante do lote).
+- **Rastreio de abertura tem limitação conhecida do formato** (pixel
+  invisível): alguns clientes de e-mail pré-carregam imagem sempre (ex.
+  Apple Mail com "Proteção de Privacidade de E-mail"), inflando a taxa de
+  abertura — não é bug nosso, é limitação de qualquer sistema que rastreia
+  assim.
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |
@@ -426,3 +487,4 @@ foi importado (igual `--check` no CLI); a importação de achados
 | Monitoramento Fiscal — pré-análise pública (só CNPJ, sem procuração) | Fácil | ✅ MVP implementado |
 | Monitoramento Fiscal (estilo Veri) — via CSV, com CND/parcelamento/sublimite Simples | Médio | ✅ MVP implementado |
 | Monitoramento Fiscal — integração real via Serpro Integra Contador (canal oficial Receita Federal) | Difícil (contrato Serpro + certificado digital) | ⏳ Terreno preparado (`SerproIntegraContadorProvider`), não ativado — ver seção acima |
+| Campanha de prospecção PGFN — envio + follow-up + rastreio + relatório semanal | Médio (depende de Custom Search API pra achar e-mail) | ✅ MVP implementado — textos de e-mail ainda são rascunho, ver seção acima |

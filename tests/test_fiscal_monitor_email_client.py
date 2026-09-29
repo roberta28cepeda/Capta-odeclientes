@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.fiscal_monitor.email_client import EmailError, send_email
+from src.fiscal_monitor.email_client import EmailError, send_email, send_email_html
 
 
 def test_send_email_uses_starttls_login_and_sendmail():
@@ -48,3 +48,29 @@ def test_send_email_raises_email_error_on_smtp_failure():
     with patch("smtplib.SMTP", side_effect=OSError("conexão recusada")):
         with pytest.raises(EmailError, match="Falha ao enviar e-mail"):
             send_email("cliente@exemplo.com", "Assunto", "Corpo", "smtp.exemplo.com", 587, "usuario", "senha")
+
+
+def test_send_email_html_includes_both_plain_and_html_parts():
+    server = MagicMock()
+    with patch("smtplib.SMTP") as mock_smtp:
+        mock_smtp.return_value.__enter__.return_value = server
+        send_email_html(
+            "cliente@exemplo.com",
+            "Assunto",
+            "Corpo em texto",
+            "<html><body>Corpo em <b>HTML</b><img src='x'></body></html>",
+            "smtp.exemplo.com",
+            587,
+            "usuario",
+            "senha",
+        )
+
+    remetente, destinatarios, corpo = server.sendmail.call_args[0]
+    assert destinatarios == ["cliente@exemplo.com"]
+    mensagem = email.message_from_string(corpo)
+    partes = mensagem.get_payload()
+    assert len(partes) == 2
+    texto_plain = partes[0].get_payload(decode=True).decode("utf-8")
+    texto_html = partes[1].get_payload(decode=True).decode("utf-8")
+    assert "Corpo em texto" in texto_plain
+    assert "<b>HTML</b>" in texto_html
