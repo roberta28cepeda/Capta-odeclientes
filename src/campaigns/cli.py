@@ -62,16 +62,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.buscar_emails:
-        api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
-        search_engine_id = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
-        if not api_key or not search_engine_id:
-            print("Defina GOOGLE_SEARCH_API_KEY e GOOGLE_SEARCH_ENGINE_ID no .env para --buscar-emails.", file=sys.stderr)
+        api_key = os.environ.get("BRAVE_SEARCH_API_KEY")
+        if not api_key:
+            print("Defina BRAVE_SEARCH_API_KEY no .env para --buscar-emails.", file=sys.stderr)
             return 1
         leads = storage.leads_sem_email(conn)
         encontrados = 0
         for lead in leads:
             try:
-                email = buscar_email_por_empresa(lead.razao_social or lead.cnpj, api_key, search_engine_id)
+                email = buscar_email_por_empresa(lead.razao_social or lead.cnpj, api_key)
             except EmailFinderError as exc:
                 print(f"Erro ao buscar e-mail de {lead.cnpj}: {exc}", file=sys.stderr)
                 continue

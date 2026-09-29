@@ -422,26 +422,26 @@ mesmo app Flask/projeto Vercel, reaproveitando o mesmo Postgres e SMTP já
 configurados.
 
 Fluxo: importa uma lista de CNPJs (ex: saída do `prospecting.pgfn_cli`) →
-busca o e-mail de cada empresa via Google (quando ainda não tem) → manda
-um e-mail inicial → manda até 3 follow-ups, um a cada 3 dias, pros que não
-converteram → registra abertura (pixel invisível) e clique (link
+busca o e-mail de cada empresa via busca na web (quando ainda não tem) →
+manda um e-mail inicial → manda até 3 follow-ups, um a cada 3 dias, pros
+que não converteram → registra abertura (pixel invisível) e clique (link
 redirecionado) de cada envio → manda um relatório por e-mail toda
 segunda-feira com esses números da semana anterior.
 
 ### Setup
 
 Além do SMTP (mesmas variáveis do `fiscal_monitor`, ver acima), a busca
-de e-mail usa a **Custom Search JSON API** do Google — diferente da
-`GOOGLE_PLACES_API_KEY` do módulo `prospecting`:
+de e-mail usa a **Brave Search API** — não a Google Custom Search JSON
+API: o Google fechou essa API pra contas novas em 2025 e vai descontinuar
+de vez em 2027 (o recurso "pesquisar toda a Web" nem existe mais pra
+mecanismo criado agora, só busca em até 50 domínios específicos, o que
+não serve pra buscar o site de empresa qualquer):
 
-1. Crie um mecanismo em [programmablesearchengine.google.com](https://programmablesearchengine.google.com/controlpanel/create),
-   ative "Pesquisar toda a Web" nas configurações básicas, e copie o
-   **Search engine ID** → `GOOGLE_SEARCH_ENGINE_ID`.
-2. Ative a "Custom Search API" no Google Cloud Console e crie uma chave
-   de API → `GOOGLE_SEARCH_API_KEY`.
-3. **100 buscas grátis por dia**, ~US$5 a cada 1.000 acima disso (teto de
-   10.000/dia) — cada CNPJ sem e-mail cadastrado gasta 1 busca. Pra um
-   volume de até 100 leads novos/dia, fica de graça.
+1. Crie uma conta em [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/),
+   assine o plano gratuito ("Free"), e gere uma API key → `BRAVE_SEARCH_API_KEY`.
+2. **2.000 buscas grátis por mês** (~65/dia) — cada CNPJ sem e-mail
+   cadastrado gasta 1 busca. Pra um volume de até ~65 leads novos/dia,
+   fica de graça; acima disso a Brave cobra por uso.
 
 ### Uso (CLI, local)
 
@@ -487,4 +487,4 @@ python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.c
 | Monitoramento Fiscal — pré-análise pública (só CNPJ, sem procuração) | Fácil | ✅ MVP implementado |
 | Monitoramento Fiscal (estilo Veri) — via CSV, com CND/parcelamento/sublimite Simples | Médio | ✅ MVP implementado |
 | Monitoramento Fiscal — integração real via Serpro Integra Contador (canal oficial Receita Federal) | Difícil (contrato Serpro + certificado digital) | ⏳ Terreno preparado (`SerproIntegraContadorProvider`), não ativado — ver seção acima |
-| Campanha de prospecção PGFN — envio + follow-up + rastreio + relatório semanal | Médio (depende de Custom Search API pra achar e-mail) | ✅ MVP implementado — textos de e-mail ainda são rascunho, ver seção acima |
+| Campanha de prospecção PGFN — envio + follow-up + rastreio + relatório semanal | Médio (depende da Brave Search API pra achar e-mail) | ✅ MVP implementado — textos de e-mail ainda são rascunho, ver seção acima |
