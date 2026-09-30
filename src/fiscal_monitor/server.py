@@ -34,7 +34,7 @@ _TENANTS_TEMPLATE = """
 <h1>Escritórios monitorados</h1>
 <p><a href="/admin/tenants/novo">+ Cadastrar novo escritório</a></p>
 <p><a href="/pre-analise">Gerar pré-análise (só CNPJ, sem procuração) &rarr;</a></p>
-<p><a href="/admin/campanhas/leads">Campanha de prospecção PGFN (leads, templates) &rarr;</a></p>
+<p><a href="/admin/campanhas/leads">Campanhas de prospecção (leads, templates por tese) &rarr;</a></p>
 <p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>

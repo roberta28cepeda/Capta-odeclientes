@@ -1,10 +1,11 @@
-"""CLI: importa leads, busca e-mail via Google, roda o envio do dia e o
-relatório semanal — pra rodar localmente/testar sem depender do cron do
-Vercel. Em produção, `/cron/campanhas/rodar` (protegido por CRON_SECRET)
-faz o mesmo que `--enviar-diario` + `--relatorio-semanal` (às segundas).
+"""CLI: importa leads (por tese), busca e-mail via Exa, roda o envio do
+dia e o relatório semanal — pra rodar localmente/testar sem depender do
+cron do Vercel. Em produção, `/cron/campanhas/rodar` (protegido por
+CRON_SECRET) faz o mesmo que `--enviar-diario` + `--relatorio-semanal`
+(às segundas), já cobrindo todas as teses de uma vez.
 
 Uso:
-    python -m src.campaigns.cli --import-leads --csv leads_pgfn.csv
+    python -m src.campaigns.cli --import-leads --tese transportadoras_pgfn --csv leads_transportadoras.csv
     python -m src.campaigns.cli --buscar-emails
     python -m src.campaigns.cli --enviar-diario --base-url https://capta-fiscal-monitor.vercel.app
     python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.com.br
@@ -32,6 +33,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode.add_argument("--relatorio-semanal", action="store_true", help="Envia o relatório de abertura/clique dos últimos 7 dias")
 
     parser.add_argument("--db-path", default=storage.DEFAULT_DB_PATH, help="Caminho do banco sqlite")
+    parser.add_argument("--tese", help="Tese/planilha do lead, obrigatório para --import-leads")
     parser.add_argument("--csv", help="Caminho do CSV, para --import-leads")
     parser.add_argument("--base-url", default="http://localhost:8090", help="URL pública do dashboard, pros links de rastreio")
     parser.add_argument("--destinatario", help="E-mail que recebe o relatório semanal")
@@ -44,8 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     conn = storage.connect(args.db_path)
 
     if args.import_leads:
-        if not args.csv:
-            print("--csv é obrigatório para --import-leads.", file=sys.stderr)
+        if not args.csv or not args.tese:
+            print("--csv e --tese são obrigatórios para --import-leads.", file=sys.stderr)
             return 1
         count = 0
         with open(args.csv, encoding="utf-8") as f:
@@ -53,12 +55,14 @@ def main(argv: list[str] | None = None) -> int:
                 cnpj = (row.get("cnpj") or "").strip()
                 if not cnpj:
                     continue
+                valor_raw = (row.get("valor_divida") or "").strip()
                 storage.create_lead(
-                    conn, cnpj, razao_social=(row.get("razao_social") or "").strip() or None,
+                    conn, cnpj, args.tese, razao_social=(row.get("razao_social") or "").strip() or None,
                     email=(row.get("email") or "").strip() or None,
+                    valor_divida=float(valor_raw) if valor_raw else None,
                 )
                 count += 1
-        print(f"{count} lead(s) importado(s).")
+        print(f"{count} lead(s) importado(s) na tese '{args.tese}'.")
         return 0
 
     if args.buscar_emails:

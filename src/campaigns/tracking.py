@@ -25,17 +25,5 @@ def click_url(base_url: str, tracking_token: str, destino: str) -> str:
     return f"{base_url.rstrip('/')}/track/click/{tracking_token}?{urlencode({'url': destino})}"
 
 
-def texto_para_html(texto: str) -> str:
-    """Escapa e converte quebra de linha simples em <br> — o suficiente pra
-    um e-mail de texto corrido, sem precisar de um template HTML completo.
-    """
-    escapado = (
-        texto.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    )
-    return escapado.replace("\n", "<br>\n")
-
-
-def montar_corpo_html(texto_formatado: str, base_url: str, tracking_token: str) -> str:
-    corpo_html = texto_para_html(texto_formatado)
-    pixel = f'<img src="{pixel_url(base_url, tracking_token)}" width="1" height="1" alt="" style="display:none">'
-    return f"<html><body>{corpo_html}{pixel}</body></html>"
+def pixel_img_tag(base_url: str, tracking_token: str) -> str:
+    return f'<img src="{pixel_url(base_url, tracking_token)}" width="1" height="1" alt="" style="display:none">'

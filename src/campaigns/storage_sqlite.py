@@ -15,14 +15,19 @@ from src.campaigns.templates import DEFAULT_TEMPLATES
 
 DEFAULT_DB_PATH = "output/campaigns.db"
 
+_CHECKLIST_SEPARADOR = "\n"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campanha_leads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    cnpj TEXT NOT NULL UNIQUE,
+    cnpj TEXT NOT NULL,
+    tese TEXT NOT NULL,
     razao_social TEXT,
     email TEXT,
     status TEXT NOT NULL DEFAULT 'ativo',
-    criado_em TEXT NOT NULL
+    criado_em TEXT NOT NULL,
+    valor_divida REAL,
+    UNIQUE(cnpj, tese)
 );
 
 CREATE TABLE IF NOT EXISTS campanha_envios (
@@ -42,10 +47,19 @@ CREATE TABLE IF NOT EXISTS campanha_eventos (
 );
 
 CREATE TABLE IF NOT EXISTS campanha_templates (
-    tipo TEXT PRIMARY KEY,
+    tese TEXT NOT NULL,
+    tipo TEXT NOT NULL,
     assunto TEXT NOT NULL,
-    corpo TEXT NOT NULL,
-    link_cta TEXT NOT NULL DEFAULT ''
+    tag TEXT NOT NULL DEFAULT '',
+    headline TEXT NOT NULL DEFAULT '',
+    paragrafo1 TEXT NOT NULL DEFAULT '',
+    paragrafo2 TEXT NOT NULL DEFAULT '',
+    checklist TEXT NOT NULL DEFAULT '',
+    italico TEXT NOT NULL DEFAULT '',
+    cta_texto TEXT NOT NULL DEFAULT '',
+    link_cta TEXT NOT NULL DEFAULT '',
+    rodape_nota TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (tese, tipo)
 );
 """
 
@@ -63,30 +77,41 @@ def connect(db_path: str = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 
 def _seed_default_templates(conn: sqlite3.Connection) -> None:
-    for tipo, template in DEFAULT_TEMPLATES.items():
-        conn.execute(
-            "INSERT OR IGNORE INTO campanha_templates (tipo, assunto, corpo, link_cta) VALUES (?, ?, ?, ?)",
-            (tipo, template["assunto"], template["corpo"], template["link_cta"]),
-        )
+    for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
+        for tipo, campos in templates_do_tese.items():
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO campanha_templates
+                    (tese, tipo, assunto, tag, headline, paragrafo1, paragrafo2, checklist, italico, cta_texto, link_cta, rodape_nota)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    tese, tipo, campos["assunto"], campos["tag"], campos["headline"], campos["paragrafo1"],
+                    campos["paragrafo2"], _CHECKLIST_SEPARADOR.join(campos["checklist"]), campos["italico"],
+                    campos["cta_texto"], campos["link_cta"], campos["rodape_nota"],
+                ),
+            )
     conn.commit()
 
 
 def create_lead(
-    conn: sqlite3.Connection, cnpj: str, razao_social: str | None = None, email: str | None = None
+    conn: sqlite3.Connection, cnpj: str, tese: str, razao_social: str | None = None, email: str | None = None,
+    valor_divida: float | None = None,
 ) -> Lead:
     criado_em = datetime.now(timezone.utc).isoformat()
     conn.execute(
         """
-        INSERT INTO campanha_leads (cnpj, razao_social, email, status, criado_em)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(cnpj) DO UPDATE SET
+        INSERT INTO campanha_leads (cnpj, tese, razao_social, email, status, criado_em, valor_divida)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(cnpj, tese) DO UPDATE SET
             razao_social = excluded.razao_social,
-            email = COALESCE(campanha_leads.email, excluded.email)
+            email = COALESCE(campanha_leads.email, excluded.email),
+            valor_divida = COALESCE(excluded.valor_divida, campanha_leads.valor_divida)
         """,
-        (cnpj, razao_social, email, STATUS_ATIVO, criado_em),
+        (cnpj, tese, razao_social, email, STATUS_ATIVO, criado_em, valor_divida),
     )
     conn.commit()
-    return get_lead_by_cnpj(conn, cnpj)  # type: ignore[return-value]
+    return get_lead_by_cnpj(conn, cnpj, tese)  # type: ignore[return-value]
 
 
 def get_lead(conn: sqlite3.Connection, lead_id: int) -> Lead | None:
@@ -94,20 +119,34 @@ def get_lead(conn: sqlite3.Connection, lead_id: int) -> Lead | None:
     return _row_to_lead(row) if row else None
 
 
-def get_lead_by_cnpj(conn: sqlite3.Connection, cnpj: str) -> Lead | None:
-    row = conn.execute("SELECT * FROM campanha_leads WHERE cnpj = ?", (cnpj,)).fetchone()
+def get_lead_by_cnpj(conn: sqlite3.Connection, cnpj: str, tese: str) -> Lead | None:
+    row = conn.execute("SELECT * FROM campanha_leads WHERE cnpj = ? AND tese = ?", (cnpj, tese)).fetchone()
     return _row_to_lead(row) if row else None
 
 
-def list_leads(conn: sqlite3.Connection) -> list[Lead]:
-    rows = conn.execute("SELECT * FROM campanha_leads ORDER BY id").fetchall()
+def list_leads(conn: sqlite3.Connection, tese: str | None = None) -> list[Lead]:
+    if tese is None:
+        rows = conn.execute("SELECT * FROM campanha_leads ORDER BY id").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM campanha_leads WHERE tese = ? ORDER BY id", (tese,)).fetchall()
     return [_row_to_lead(row) for row in rows]
 
 
-def leads_sem_email(conn: sqlite3.Connection) -> list[Lead]:
-    rows = conn.execute(
-        "SELECT * FROM campanha_leads WHERE status = 'ativo' AND (email IS NULL OR email = '') ORDER BY id"
-    ).fetchall()
+def list_teses(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("SELECT DISTINCT tese FROM campanha_leads ORDER BY tese").fetchall()
+    return [row["tese"] for row in rows]
+
+
+def leads_sem_email(conn: sqlite3.Connection, tese: str | None = None) -> list[Lead]:
+    if tese is None:
+        rows = conn.execute(
+            "SELECT * FROM campanha_leads WHERE status = 'ativo' AND (email IS NULL OR email = '') ORDER BY id"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM campanha_leads WHERE status = 'ativo' AND tese = ? AND (email IS NULL OR email = '') ORDER BY id",
+            (tese,),
+        ).fetchall()
     return [_row_to_lead(row) for row in rows]
 
 
@@ -118,12 +157,8 @@ def set_lead_email(conn: sqlite3.Connection, lead_id: int, email: str) -> None:
 
 def _row_to_lead(row: sqlite3.Row) -> Lead:
     return Lead(
-        id=row["id"],
-        cnpj=row["cnpj"],
-        razao_social=row["razao_social"],
-        email=row["email"],
-        status=row["status"],
-        criado_em=row["criado_em"],
+        id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],
+        status=row["status"], criado_em=row["criado_em"], valor_divida=row["valor_divida"],
     )
 
 
@@ -155,6 +190,21 @@ def envios_desde(conn: sqlite3.Connection, desde_iso: str) -> list[Envio]:
         "SELECT * FROM campanha_envios WHERE enviado_em >= ? ORDER BY id", (desde_iso,)
     ).fetchall()
     return [_row_to_envio(row) for row in rows]
+
+
+def envios_de_hoje_por_tese(conn: sqlite3.Connection, tese: str, desde_iso: str) -> int:
+    """Quantos envios (inicial + follow-up somados) já saíram hoje pra essa
+    tese — usado pra aplicar o limite diário por tese.
+    """
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS total FROM campanha_envios
+        JOIN campanha_leads ON campanha_leads.id = campanha_envios.lead_id
+        WHERE campanha_leads.tese = ? AND campanha_envios.enviado_em >= ?
+        """,
+        (tese, desde_iso),
+    ).fetchone()
+    return row["total"]
 
 
 def _row_to_envio(row: sqlite3.Row) -> Envio:
@@ -191,26 +241,51 @@ def _row_to_evento(row: sqlite3.Row) -> Evento:
     return Evento(id=row["id"], envio_id=row["envio_id"], tipo=row["tipo"], ocorrido_em=row["ocorrido_em"], url=row["url"])
 
 
-def get_template(conn: sqlite3.Connection, tipo: str) -> Template | None:
-    row = conn.execute("SELECT * FROM campanha_templates WHERE tipo = ?", (tipo,)).fetchone()
+def get_template(conn: sqlite3.Connection, tese: str, tipo: str) -> Template | None:
+    row = conn.execute("SELECT * FROM campanha_templates WHERE tese = ? AND tipo = ?", (tese, tipo)).fetchone()
     return _row_to_template(row) if row else None
 
 
-def list_templates(conn: sqlite3.Connection) -> list[Template]:
-    rows = conn.execute("SELECT * FROM campanha_templates ORDER BY tipo").fetchall()
+def list_templates(conn: sqlite3.Connection, tese: str | None = None) -> list[Template]:
+    if tese is None:
+        rows = conn.execute("SELECT * FROM campanha_templates ORDER BY tese, tipo").fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM campanha_templates WHERE tese = ? ORDER BY tipo", (tese,)).fetchall()
     return [_row_to_template(row) for row in rows]
 
 
+def list_template_teses(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute("SELECT DISTINCT tese FROM campanha_templates ORDER BY tese").fetchall()
+    return [row["tese"] for row in rows]
+
+
 def _row_to_template(row: sqlite3.Row) -> Template:
-    return Template(tipo=row["tipo"], assunto=row["assunto"], corpo=row["corpo"], link_cta=row["link_cta"])
+    return Template(
+        tese=row["tese"], tipo=row["tipo"], assunto=row["assunto"], tag=row["tag"], headline=row["headline"],
+        paragrafo1=row["paragrafo1"], paragrafo2=row["paragrafo2"],
+        checklist=row["checklist"].split(_CHECKLIST_SEPARADOR) if row["checklist"] else [],
+        italico=row["italico"], cta_texto=row["cta_texto"], link_cta=row["link_cta"], rodape_nota=row["rodape_nota"],
+    )
 
 
-def set_template(conn: sqlite3.Connection, tipo: str, assunto: str, corpo: str, link_cta: str = "") -> None:
+def set_template(
+    conn: sqlite3.Connection, tese: str, tipo: str, assunto: str, tag: str, headline: str, paragrafo1: str,
+    paragrafo2: str, checklist: list[str], italico: str, cta_texto: str, link_cta: str, rodape_nota: str,
+) -> None:
     conn.execute(
         """
-        INSERT INTO campanha_templates (tipo, assunto, corpo, link_cta) VALUES (?, ?, ?, ?)
-        ON CONFLICT(tipo) DO UPDATE SET assunto = excluded.assunto, corpo = excluded.corpo, link_cta = excluded.link_cta
+        INSERT INTO campanha_templates
+            (tese, tipo, assunto, tag, headline, paragrafo1, paragrafo2, checklist, italico, cta_texto, link_cta, rodape_nota)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(tese, tipo) DO UPDATE SET
+            assunto = excluded.assunto, tag = excluded.tag, headline = excluded.headline,
+            paragrafo1 = excluded.paragrafo1, paragrafo2 = excluded.paragrafo2, checklist = excluded.checklist,
+            italico = excluded.italico, cta_texto = excluded.cta_texto, link_cta = excluded.link_cta,
+            rodape_nota = excluded.rodape_nota
         """,
-        (tipo, assunto, corpo, link_cta),
+        (
+            tese, tipo, assunto, tag, headline, paragrafo1, paragrafo2, _CHECKLIST_SEPARADOR.join(checklist),
+            italico, cta_texto, link_cta, rodape_nota,
+        ),
     )
     conn.commit()

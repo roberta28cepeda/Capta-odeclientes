@@ -1,7 +1,7 @@
 """Backend Postgres — usado em produção quando alguma variável de conexão
-está definida (mesmas do `fiscal_monitor`: `DATABASE_URL`, `POSTGRES_URL`,
-`POSTGRES_URL_NON_POOLING`). Tabelas prefixadas com `campanha_` pra
-conviver no mesmo banco Postgres do `fiscal_monitor` sem colidir nome.
+está definida (mesmas do `fiscal_monitor` — os dois módulos dividem o
+mesmo banco Postgres, em tabelas com prefixo diferente). Tabelas de leads
+e templates são por tese (ver `models.py`).
 """
 
 from __future__ import annotations
@@ -18,14 +18,19 @@ from src.campaigns.templates import DEFAULT_TEMPLATES
 
 DEFAULT_DB_PATH = "output/campaigns.db"  # não usado neste backend; mantido por simetria de assinatura
 
+_CHECKLIST_SEPARADOR = "\n"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS campanha_leads (
     id SERIAL PRIMARY KEY,
-    cnpj TEXT NOT NULL UNIQUE,
+    cnpj TEXT NOT NULL,
+    tese TEXT NOT NULL,
     razao_social TEXT,
     email TEXT,
     status TEXT NOT NULL DEFAULT 'ativo',
-    criado_em TEXT NOT NULL
+    criado_em TEXT NOT NULL,
+    valor_divida DOUBLE PRECISION,
+    UNIQUE(cnpj, tese)
 );
 
 CREATE TABLE IF NOT EXISTS campanha_envios (
@@ -45,10 +50,19 @@ CREATE TABLE IF NOT EXISTS campanha_eventos (
 );
 
 CREATE TABLE IF NOT EXISTS campanha_templates (
-    tipo TEXT PRIMARY KEY,
+    tese TEXT NOT NULL,
+    tipo TEXT NOT NULL,
     assunto TEXT NOT NULL,
-    corpo TEXT NOT NULL,
-    link_cta TEXT NOT NULL DEFAULT ''
+    tag TEXT NOT NULL DEFAULT '',
+    headline TEXT NOT NULL DEFAULT '',
+    paragrafo1 TEXT NOT NULL DEFAULT '',
+    paragrafo2 TEXT NOT NULL DEFAULT '',
+    checklist TEXT NOT NULL DEFAULT '',
+    italico TEXT NOT NULL DEFAULT '',
+    cta_texto TEXT NOT NULL DEFAULT '',
+    link_cta TEXT NOT NULL DEFAULT '',
+    rodape_nota TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (tese, tipo)
 );
 """
 
@@ -76,32 +90,65 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
     if not _schema_ready:
         with conn.cursor() as cur:
             cur.execute(SCHEMA)
-            for tipo, template in DEFAULT_TEMPLATES.items():
-                cur.execute(
-                    "INSERT INTO campanha_templates (tipo, assunto, corpo, link_cta) VALUES (%s, %s, %s, %s) "
-                    "ON CONFLICT (tipo) DO NOTHING",
-                    (tipo, template["assunto"], template["corpo"], template["link_cta"]),
-                )
+            # Migração da versão anterior (leads únicos só por cnpj, templates só por tipo,
+            # sem os campos estruturados novos) — banco já existente no ar antes desta mudança.
+            cur.execute("ALTER TABLE campanha_leads ADD COLUMN IF NOT EXISTS tese TEXT NOT NULL DEFAULT ''")
+            cur.execute("ALTER TABLE campanha_leads ADD COLUMN IF NOT EXISTS valor_divida DOUBLE PRECISION")
+            cur.execute("DELETE FROM campanha_leads WHERE tese = ''")
+            cur.execute("ALTER TABLE campanha_leads DROP CONSTRAINT IF EXISTS campanha_leads_cnpj_key")
+            cur.execute("ALTER TABLE campanha_leads DROP CONSTRAINT IF EXISTS campanha_leads_cnpj_tese_key")
+            cur.execute("ALTER TABLE campanha_leads ADD CONSTRAINT campanha_leads_cnpj_tese_key UNIQUE (cnpj, tese)")
+            for coluna, tipo_sql in [
+                ("tese", "TEXT NOT NULL DEFAULT ''"), ("tag", "TEXT NOT NULL DEFAULT ''"),
+                ("headline", "TEXT NOT NULL DEFAULT ''"), ("paragrafo1", "TEXT NOT NULL DEFAULT ''"),
+                ("paragrafo2", "TEXT NOT NULL DEFAULT ''"), ("checklist", "TEXT NOT NULL DEFAULT ''"),
+                ("italico", "TEXT NOT NULL DEFAULT ''"), ("cta_texto", "TEXT NOT NULL DEFAULT ''"),
+                ("rodape_nota", "TEXT NOT NULL DEFAULT ''"),
+            ]:
+                cur.execute(f"ALTER TABLE campanha_templates ADD COLUMN IF NOT EXISTS {coluna} {tipo_sql}")
+            cur.execute("DELETE FROM campanha_templates WHERE tese = ''")
+            cur.execute("ALTER TABLE campanha_templates DROP CONSTRAINT IF EXISTS campanha_templates_pkey")
+            cur.execute("ALTER TABLE campanha_templates ADD PRIMARY KEY (tese, tipo)")
+
+            for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
+                for tipo, campos in templates_do_tese.items():
+                    cur.execute(
+                        """
+                        INSERT INTO campanha_templates
+                            (tese, tipo, assunto, tag, headline, paragrafo1, paragrafo2, checklist, italico, cta_texto, link_cta, rodape_nota)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (tese, tipo) DO NOTHING
+                        """,
+                        (
+                            tese, tipo, campos["assunto"], campos["tag"], campos["headline"], campos["paragrafo1"],
+                            campos["paragrafo2"], _CHECKLIST_SEPARADOR.join(campos["checklist"]), campos["italico"],
+                            campos["cta_texto"], campos["link_cta"], campos["rodape_nota"],
+                        ),
+                    )
         conn.commit()
         _schema_ready = True
     return conn
 
 
-def create_lead(conn, cnpj: str, razao_social: str | None = None, email: str | None = None) -> Lead:
+def create_lead(
+    conn, cnpj: str, tese: str, razao_social: str | None = None, email: str | None = None,
+    valor_divida: float | None = None,
+) -> Lead:
     criado_em = datetime.now(timezone.utc).isoformat()
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO campanha_leads (cnpj, razao_social, email, status, criado_em)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (cnpj) DO UPDATE SET
+            INSERT INTO campanha_leads (cnpj, tese, razao_social, email, status, criado_em, valor_divida)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (cnpj, tese) DO UPDATE SET
                 razao_social = EXCLUDED.razao_social,
-                email = COALESCE(campanha_leads.email, EXCLUDED.email)
+                email = COALESCE(campanha_leads.email, EXCLUDED.email),
+                valor_divida = COALESCE(EXCLUDED.valor_divida, campanha_leads.valor_divida)
             """,
-            (cnpj, razao_social, email, STATUS_ATIVO, criado_em),
+            (cnpj, tese, razao_social, email, STATUS_ATIVO, criado_em, valor_divida),
         )
     conn.commit()
-    return get_lead_by_cnpj(conn, cnpj)  # type: ignore[return-value]
+    return get_lead_by_cnpj(conn, cnpj, tese)  # type: ignore[return-value]
 
 
 def get_lead(conn, lead_id: int) -> Lead | None:
@@ -111,25 +158,39 @@ def get_lead(conn, lead_id: int) -> Lead | None:
     return _row_to_lead(row) if row else None
 
 
-def get_lead_by_cnpj(conn, cnpj: str) -> Lead | None:
+def get_lead_by_cnpj(conn, cnpj: str, tese: str) -> Lead | None:
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM campanha_leads WHERE cnpj = %s", (cnpj,))
+        cur.execute("SELECT * FROM campanha_leads WHERE cnpj = %s AND tese = %s", (cnpj, tese))
         row = cur.fetchone()
     return _row_to_lead(row) if row else None
 
 
-def list_leads(conn) -> list[Lead]:
+def list_leads(conn, tese: str | None = None) -> list[Lead]:
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM campanha_leads ORDER BY id")
+        if tese is None:
+            cur.execute("SELECT * FROM campanha_leads ORDER BY id")
+        else:
+            cur.execute("SELECT * FROM campanha_leads WHERE tese = %s ORDER BY id", (tese,))
         rows = cur.fetchall()
     return [_row_to_lead(row) for row in rows]
 
 
-def leads_sem_email(conn) -> list[Lead]:
+def list_teses(conn) -> list[str]:
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM campanha_leads WHERE status = 'ativo' AND (email IS NULL OR email = '') ORDER BY id"
-        )
+        cur.execute("SELECT DISTINCT tese FROM campanha_leads ORDER BY tese")
+        rows = cur.fetchall()
+    return [row["tese"] for row in rows]
+
+
+def leads_sem_email(conn, tese: str | None = None) -> list[Lead]:
+    with conn.cursor() as cur:
+        if tese is None:
+            cur.execute("SELECT * FROM campanha_leads WHERE status = 'ativo' AND (email IS NULL OR email = '') ORDER BY id")
+        else:
+            cur.execute(
+                "SELECT * FROM campanha_leads WHERE status = 'ativo' AND tese = %s AND (email IS NULL OR email = '') ORDER BY id",
+                (tese,),
+            )
         rows = cur.fetchall()
     return [_row_to_lead(row) for row in rows]
 
@@ -142,8 +203,8 @@ def set_lead_email(conn, lead_id: int, email: str) -> None:
 
 def _row_to_lead(row) -> Lead:
     return Lead(
-        id=row["id"], cnpj=row["cnpj"], razao_social=row["razao_social"], email=row["email"],
-        status=row["status"], criado_em=row["criado_em"],
+        id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],
+        status=row["status"], criado_em=row["criado_em"], valor_divida=row["valor_divida"],
     )
 
 
@@ -182,6 +243,20 @@ def envios_desde(conn, desde_iso: str) -> list[Envio]:
     return [_row_to_envio(row) for row in rows]
 
 
+def envios_de_hoje_por_tese(conn, tese: str, desde_iso: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*) AS total FROM campanha_envios
+            JOIN campanha_leads ON campanha_leads.id = campanha_envios.lead_id
+            WHERE campanha_leads.tese = %s AND campanha_envios.enviado_em >= %s
+            """,
+            (tese, desde_iso),
+        )
+        row = cur.fetchone()
+    return row["total"]
+
+
 def _row_to_envio(row) -> Envio:
     return Envio(
         id=row["id"], lead_id=row["lead_id"], tipo=row["tipo"], enviado_em=row["enviado_em"],
@@ -217,31 +292,58 @@ def _row_to_evento(row) -> Evento:
     return Evento(id=row["id"], envio_id=row["envio_id"], tipo=row["tipo"], ocorrido_em=row["ocorrido_em"], url=row["url"])
 
 
-def get_template(conn, tipo: str) -> Template | None:
+def get_template(conn, tese: str, tipo: str) -> Template | None:
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM campanha_templates WHERE tipo = %s", (tipo,))
+        cur.execute("SELECT * FROM campanha_templates WHERE tese = %s AND tipo = %s", (tese, tipo))
         row = cur.fetchone()
     return _row_to_template(row) if row else None
 
 
-def list_templates(conn) -> list[Template]:
+def list_templates(conn, tese: str | None = None) -> list[Template]:
     with conn.cursor() as cur:
-        cur.execute("SELECT * FROM campanha_templates ORDER BY tipo")
+        if tese is None:
+            cur.execute("SELECT * FROM campanha_templates ORDER BY tese, tipo")
+        else:
+            cur.execute("SELECT * FROM campanha_templates WHERE tese = %s ORDER BY tipo", (tese,))
         rows = cur.fetchall()
     return [_row_to_template(row) for row in rows]
 
 
+def list_template_teses(conn) -> list[str]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT tese FROM campanha_templates ORDER BY tese")
+        rows = cur.fetchall()
+    return [row["tese"] for row in rows]
+
+
 def _row_to_template(row) -> Template:
-    return Template(tipo=row["tipo"], assunto=row["assunto"], corpo=row["corpo"], link_cta=row["link_cta"])
+    return Template(
+        tese=row["tese"], tipo=row["tipo"], assunto=row["assunto"], tag=row["tag"], headline=row["headline"],
+        paragrafo1=row["paragrafo1"], paragrafo2=row["paragrafo2"],
+        checklist=row["checklist"].split(_CHECKLIST_SEPARADOR) if row["checklist"] else [],
+        italico=row["italico"], cta_texto=row["cta_texto"], link_cta=row["link_cta"], rodape_nota=row["rodape_nota"],
+    )
 
 
-def set_template(conn, tipo: str, assunto: str, corpo: str, link_cta: str = "") -> None:
+def set_template(
+    conn, tese: str, tipo: str, assunto: str, tag: str, headline: str, paragrafo1: str, paragrafo2: str,
+    checklist: list[str], italico: str, cta_texto: str, link_cta: str, rodape_nota: str,
+) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO campanha_templates (tipo, assunto, corpo, link_cta) VALUES (%s, %s, %s, %s)
-            ON CONFLICT (tipo) DO UPDATE SET assunto = EXCLUDED.assunto, corpo = EXCLUDED.corpo, link_cta = EXCLUDED.link_cta
+            INSERT INTO campanha_templates
+                (tese, tipo, assunto, tag, headline, paragrafo1, paragrafo2, checklist, italico, cta_texto, link_cta, rodape_nota)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (tese, tipo) DO UPDATE SET
+                assunto = EXCLUDED.assunto, tag = EXCLUDED.tag, headline = EXCLUDED.headline,
+                paragrafo1 = EXCLUDED.paragrafo1, paragrafo2 = EXCLUDED.paragrafo2, checklist = EXCLUDED.checklist,
+                italico = EXCLUDED.italico, cta_texto = EXCLUDED.cta_texto, link_cta = EXCLUDED.link_cta,
+                rodape_nota = EXCLUDED.rodape_nota
             """,
-            (tipo, assunto, corpo, link_cta),
+            (
+                tese, tipo, assunto, tag, headline, paragrafo1, paragrafo2, _CHECKLIST_SEPARADOR.join(checklist),
+                italico, cta_texto, link_cta, rodape_nota,
+            ),
         )
     conn.commit()

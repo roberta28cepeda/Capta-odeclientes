@@ -16,13 +16,7 @@ def test_click_url_encodes_destination():
     assert "leactis.com.br" in url
 
 
-def test_texto_para_html_escapes_and_converts_newlines():
-    html = tracking.texto_para_html("Olá <mundo>\nSegunda linha")
-    assert "&lt;mundo&gt;" in html
-    assert "<br>" in html
-
-
-def test_montar_corpo_html_includes_pixel_img_tag():
-    html = tracking.montar_corpo_html("Olá", "https://exemplo.com", "tok123")
-    assert "<img" in html
-    assert "track/open/tok123.gif" in html
+def test_pixel_img_tag_includes_open_tracking_url():
+    tag = tracking.pixel_img_tag("https://exemplo.com", "tok123")
+    assert "<img" in tag
+    assert "track/open/tok123.gif" in tag

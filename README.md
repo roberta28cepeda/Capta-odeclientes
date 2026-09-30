@@ -415,20 +415,30 @@ Esse endpoint não importa snapshot novo — só roda o alerta sobre o que já
 foi importado (igual `--check` no CLI); a importação de achados
 (`--import-snapshot`) continua manual/via scraper próprio do escritório.
 
-## Módulo: Campanha de Prospecção (PGFN)
+## Módulo: Campanhas de Prospecção (multi-tese)
 
-Automação de e-mail frio pra lista de devedores da PGFN — separado do
-`fiscal_monitor` (que é o produto vendido pra escritórios contábeis; isso
-aqui é ferramenta de prospecção interna da Leactis), mas hospedado no
-mesmo app Flask/projeto Vercel, reaproveitando o mesmo Postgres e SMTP já
-configurados.
+Automação de e-mail frio, com **várias teses simultâneas** (ex:
+transportadoras com dívida PGFN, indústria/Simples com pendência de CND,
+parceria de certificado digital ou de tese tributária pra escritórios
+contábeis, regularização de MEI) — cada tese com sua própria planilha de
+leads e sua própria sequência de e-mail, mas todas usando o mesmo design
+visual da Leactis e o mesmo motor de envio/follow-up/rastreio. Separado
+do `fiscal_monitor` (que é o produto vendido pra escritórios contábeis;
+isso aqui é ferramenta de prospecção interna da Leactis), mas hospedado
+no mesmo app Flask/projeto Vercel, reaproveitando o mesmo Postgres e SMTP.
 
-Fluxo: importa uma lista de CNPJs (ex: saída do `prospecting.pgfn_cli`) →
-busca o e-mail de cada empresa via busca na web (quando ainda não tem) →
-manda um e-mail inicial → manda até 3 follow-ups, um a cada 3 dias, pros
-que não converteram → registra abertura (pixel invisível) e clique (link
-redirecionado) de cada envio → manda um relatório por e-mail toda
-segunda-feira com esses números da semana anterior.
+Fluxo por tese: importa a lista de CNPJs daquela tese → busca o e-mail de
+cada empresa via busca na web (quando ainda não tem) → manda um e-mail
+inicial → manda até 3 follow-ups, um a cada 3 dias, pros que não
+converteram → registra abertura (pixel invisível) e clique no botão
+(WhatsApp) de cada envio → manda um relatório por e-mail toda
+segunda-feira com esses números (por tese e no total) da semana anterior.
+
+**Limite diário por tese:** cada tese manda no máximo 10 e-mails por dia
+(inicial + follow-up somados) — mesmo limite que já era usado antes,
+pensado pra não estourar reputação de envio. Com N teses ativas, o
+sistema manda até `10 × N` e-mails/dia no total, cada tese com sua cota
+independente (uma tese sem leads pendentes não "empresta" vaga pra outra).
 
 ### Setup
 
@@ -447,21 +457,41 @@ buscas/mês). A Exa continua sem pedir cartão:
    crédito do mês acabar a busca simplesmente para de funcionar até o mês
    seguinte renovar (nunca gera cobrança sem cartão).
 
+### Teses já cadastradas
+
+| Tese (slug) | Público | Status do texto |
+| --- | --- | --- |
+| `transportadoras_pgfn` | Empresas com dívida pequena na PGFN | ✅ texto real (vindo do Apps Script) |
+| `simples_ibs_cbs` | Simples Nacional com pendência de CND | ✅ texto real |
+| `industria_ibs_cbs` | Indústria com pendência de CND/crédito B2B | ✅ texto real |
+| `contadores_certificado` | Escritórios contábeis — parceria certificado digital | ✅ texto real |
+| `contadores_tributaria` | Escritórios contábeis — parceria tese tributária | ✅ texto real |
+| `mei_regularizacao` | Regularização de MEI | ⚠️ rascunho `[AJUSTAR]` — falta o ângulo/pitch dessa tese |
+
+Em todas, o **e-mail inicial** tem o texto real; os **3 follow-ups** de
+cada tese são rascunho `[AJUSTAR]` (não existiam antes) — escreva o texto
+de verdade em `/admin/campanhas/templates?tese=<slug>` antes de ativar.
+
 ### Uso (CLI, local)
 
 ```bash
-python -m src.campaigns.cli --import-leads --csv leads_pgfn.csv
+python -m src.campaigns.cli --import-leads --tese transportadoras_pgfn --csv leads_transportadoras.csv
 python -m src.campaigns.cli --buscar-emails
 python -m src.campaigns.cli --enviar-diario --base-url https://capta-fiscal-monitor.vercel.app
 python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.com.br
 ```
 
+CSV de leads: colunas `cnpj,razao_social,email,valor_divida` (`email` e
+`valor_divida` são opcionais — `valor_divida` só é usado pelo placeholder
+`{{VALOR_DIVIDA}}` da tese de PGFN). O mesmo CNPJ pode existir em teses
+diferentes (planilhas separadas), tratado como lead independente em cada.
+
 ### Uso (web, produção)
 
-- `/admin/campanhas/leads` — lista de leads e status de envio (admin).
-- `/admin/campanhas/leads/importar` — importa CSV (`cnpj,razao_social,email`) direto pelo navegador.
-- `/admin/campanhas/templates` — edita assunto/corpo/link de cada tipo de e-mail (inicial + 3 follow-ups). **Os textos padrão são só rascunho** (marcados `[AJUSTAR]`) — edite antes de rodar a campanha de verdade.
-- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): se `EXA_API_KEY` estiver configurada, primeiro busca e-mail pros leads que ainda não têm; depois roda o envio do dia pra todo lead pendente; e às segundas-feiras também dispara o relatório semanal pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 9 * * *`, todo dia às 9h UTC) — tudo automático, sem precisar rodar nada pelo terminal em produção.
+- `/admin/campanhas/leads?tese=<slug>` — lista de leads daquela tese (ou de todas, sem o parâmetro).
+- `/admin/campanhas/leads/importar` — importa CSV pra uma tese (escolhida no formulário) direto pelo navegador.
+- `/admin/campanhas/templates?tese=<slug>` — edita cada campo do e-mail (tag, título, parágrafos, checklist, frase de urgência, texto/link do botão, nota de rodapé) daquela tese, pros 4 tipos (inicial + 3 follow-ups). Mesmo design visual da Leactis sempre, só o conteúdo muda.
+- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): se `EXA_API_KEY` estiver configurada, primeiro busca e-mail pros leads que ainda não têm (de todas as teses); depois roda o envio do dia pra todo lead pendente, respeitando o limite de 10/dia por tese; e às segundas-feiras também dispara o relatório semanal (com detalhamento por tese) pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 9 * * *`, todo dia às 9h UTC) — tudo automático, sem precisar rodar nada pelo terminal em produção.
 
 ### O que não faz (por enquanto)
 
@@ -477,6 +507,7 @@ python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.c
   Apple Mail com "Proteção de Privacidade de E-mail"), inflando a taxa de
   abertura — não é bug nosso, é limitação de qualquer sistema que rastreia
   assim.
+- **Tese de regularização de MEI ainda não tem texto real** — só rascunho, aguardando o ângulo/pitch da tese.
 
 ## Roadmap (por viabilidade)
 
