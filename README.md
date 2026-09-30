@@ -347,6 +347,15 @@ verificar isso precisa consultar manualmente:
    legal-tech (Judit.io, Escavador, ou o "Motor de Decisão" do Jusbrasil)
    — nenhuma com preço público, todas exigindo contato comercial. Ainda
    não contratado.
+4. **CAPAG da PGFN (capacidade de pagamento estimada da própria dívida,
+   nota A/B/C/D)** — existe de verdade (não confundir com a CAPAG do
+   Tesouro Nacional, que é só pra municípios/estados), usada no programa
+   de transação tributária federal. Mas só é consultável dentro do
+   **REGULARIZE** (portal da PGFN) com login da própria empresa
+   (certificado digital ou GOV.BR dela) — não é dado público de terceiro,
+   é a mesma limitação do e-CAC. Só dá pra automatizar depois que o
+   cliente já tiver dado procuração eletrônica pra Leactis (ver "O que
+   este MVP não faz (ainda)" abaixo).
 
 ### O que este MVP não faz (ainda)
 
