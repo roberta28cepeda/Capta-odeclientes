@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
-from src.fiscal_monitor.models import Cnpj, Finding, Tenant
+from src.fiscal_monitor.models import AdminUser, Cnpj, Finding, Tenant
 
 DEFAULT_DB_PATH = "output/fiscal_monitor.db"  # não usado neste backend; mantido por simetria de assinatura
 
@@ -69,6 +69,15 @@ CREATE TABLE IF NOT EXISTS findings (
     vencimento TEXT,
     pago BOOLEAN NOT NULL DEFAULT false,
     status TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+    id SERIAL PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    nome TEXT,
+    criado_em TEXT NOT NULL,
+    ativo BOOLEAN NOT NULL DEFAULT true
 );
 """
 
@@ -349,3 +358,46 @@ def findings_by_cnpj_for_tenant(conn, tenant_id: int) -> list[tuple[Cnpj, list[F
         open_findings = [f for f in findings if f.status != "resolvida"]
         result.append((cnpj, open_findings))
     return result
+
+
+def create_admin_user(conn, username: str, password_hash: str, nome: str | None = None) -> AdminUser:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO admin_users (username, password_hash, nome, criado_em, ativo) VALUES (%s, %s, %s, %s, true) RETURNING id",
+            (username, password_hash, nome, criado_em),
+        )
+        new_id = cur.fetchone()["id"]
+    conn.commit()
+    return AdminUser(id=new_id, username=username, password_hash=password_hash, nome=nome, criado_em=criado_em, ativo=True)
+
+
+def get_admin_user_by_username(conn, username: str) -> AdminUser | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM admin_users WHERE username = %s", (username,))
+        row = cur.fetchone()
+    return _row_to_admin_user(row) if row else None
+
+
+def list_admin_users(conn) -> list[AdminUser]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM admin_users ORDER BY id")
+        rows = cur.fetchall()
+    return [_row_to_admin_user(row) for row in rows]
+
+
+def set_admin_user_ativo(conn, user_id: int, ativo: bool) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE admin_users SET ativo = %s WHERE id = %s", (ativo, user_id))
+    conn.commit()
+
+
+def _row_to_admin_user(row) -> AdminUser:
+    return AdminUser(
+        id=row["id"],
+        username=row["username"],
+        password_hash=row["password_hash"],
+        nome=row["nome"],
+        criado_em=row["criado_em"],
+        ativo=row["ativo"],
+    )

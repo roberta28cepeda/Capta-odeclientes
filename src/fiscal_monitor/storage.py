@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from src.fiscal_monitor.models import Cnpj, Finding, REGIMES_TRIBUTARIOS, Tenant  # noqa: F401
+from src.fiscal_monitor.models import AdminUser, Cnpj, Finding, REGIMES_TRIBUTARIOS, Tenant  # noqa: F401
 
 if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRES_URL_NON_POOLING"):
     from src.fiscal_monitor.storage_postgres import (  # noqa: F401
@@ -18,18 +18,22 @@ if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.enviro
         add_finding,
         all_findings_for_cnpj,
         connect,
+        create_admin_user,
         create_snapshot,
         create_tenant,
         faturamento_acumulado_12m,
         findings_by_cnpj_for_tenant,
         findings_for_snapshot,
+        get_admin_user_by_username,
         get_cnpj,
         get_cnpj_by_number,
         get_tenant,
         latest_snapshot_id,
+        list_admin_users,
         list_cnpjs,
         list_tenants,
         record_faturamento,
+        set_admin_user_ativo,
         upsert_cnpj,
     )
 else:
@@ -38,17 +42,21 @@ else:
         add_finding,
         all_findings_for_cnpj,
         connect,
+        create_admin_user,
         create_snapshot,
         create_tenant,
         faturamento_acumulado_12m,
         findings_by_cnpj_for_tenant,
         findings_for_snapshot,
+        get_admin_user_by_username,
         get_cnpj,
         get_cnpj_by_number,
         get_tenant,
         latest_snapshot_id,
+        list_admin_users,
         list_cnpjs,
         list_tenants,
         record_faturamento,
+        set_admin_user_ativo,
         upsert_cnpj,
     )

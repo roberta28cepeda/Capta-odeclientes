@@ -39,6 +39,7 @@ from src.fiscal_monitor.preanalise import (
     validar_cnpj,
 )
 from src.fiscal_monitor.providers import import_portfolio_csv
+from werkzeug.security import generate_password_hash
 
 _TENANTS_TEMPLATE = """
 <!doctype html>
@@ -47,6 +48,7 @@ _TENANTS_TEMPLATE = """
 <p><a href="/admin/tenants/novo">+ Cadastrar novo escritório</a></p>
 <p><a href="/pre-analise">Gerar pré-análise (só CNPJ, sem procuração) &rarr;</a></p>
 <p><a href="/admin/campanhas/leads">Campanhas de prospecção (leads, templates por tese) &rarr;</a></p>
+<p><a href="/admin/usuarios">Gerenciar usuários da equipe &rarr;</a></p>
 <p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
@@ -146,6 +148,42 @@ _NOVO_TENANT_TEMPLATE = """
      <small>colunas: cnpj,razao_social,nome_fantasia,regime_tributario</small></label></p>
   <button type="submit">Cadastrar</button>
 </form>
+"""
+
+_USUARIOS_TEMPLATE = """
+<!doctype html>
+<title>Usuários da equipe</title>
+<h1>Usuários da equipe</h1>
+<p><a href="/tenants">&larr; voltar</a></p>
+{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
+{% if sucesso %}<p style="color:#1a7a3c"><strong>{{ sucesso }}</strong></p>{% endif %}
+
+<h2>Cadastrar novo acesso</h2>
+<form method="post">
+  <p><label>Nome<br><input type="text" name="nome" value="{{ nome or '' }}"></label></p>
+  <p><label>Usuário (login)<br><input type="text" name="username" required value="{{ username or '' }}"></label></p>
+  <p><label>Senha<br><input type="password" name="password" required minlength="8"></label></p>
+  <button type="submit">Cadastrar</button>
+</form>
+
+<h2>Acessos cadastrados</h2>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Usuário</th><th>Nome</th><th>Criado em</th><th>Status</th><th></th></tr>
+{% for usuario in usuarios %}
+<tr>
+  <td>{{ usuario.username }}</td>
+  <td>{{ usuario.nome or "-" }}</td>
+  <td>{{ usuario.criado_em[:10] }}</td>
+  <td>{{ "ativo" if usuario.ativo else "desativado" }}</td>
+  <td>
+    <form method="post" action="/admin/usuarios/{{ usuario.id }}/alternar-ativo" style="display:inline">
+      <button type="submit">{{ "Desativar" if usuario.ativo else "Reativar" }}</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</table>
+{% if not usuarios %}<p>Nenhum acesso individual cadastrado ainda — só o usuário mestre (ADMIN_USERNAME).</p>{% endif %}
 """
 
 _TENANT_CRIADO_TEMPLATE = """
@@ -259,6 +297,7 @@ def create_app(
 ) -> Flask:
     app = Flask(__name__)
     app.config["CAMPAIGNS_DB_PATH"] = campaigns_db_path
+    app.config["DB_PATH"] = db_path
 
     def _connect() -> sqlite3.Connection:
         return storage.connect(db_path)
@@ -318,6 +357,70 @@ def create_app(
         return render_template_string(
             _TENANT_CRIADO_TEMPLATE, tenant=tenant, link=link, resultado_carteira=resultado_carteira
         )
+
+    @app.route("/admin/usuarios", methods=["GET", "POST"])
+    def admin_usuarios():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+
+        conn = _connect()
+
+        if request.method == "GET":
+            usuarios = storage.list_admin_users(conn)
+            conn.close()
+            return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios)
+
+        nome = (request.form.get("nome") or "").strip() or None
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+
+        if not username or len(password) < 8:
+            usuarios = storage.list_admin_users(conn)
+            conn.close()
+            return (
+                render_template_string(
+                    _USUARIOS_TEMPLATE,
+                    usuarios=usuarios,
+                    erro="Usuário é obrigatório e a senha precisa ter pelo menos 8 caracteres.",
+                    nome=nome,
+                    username=username,
+                ),
+                400,
+            )
+
+        if storage.get_admin_user_by_username(conn, username) is not None:
+            usuarios = storage.list_admin_users(conn)
+            conn.close()
+            return (
+                render_template_string(
+                    _USUARIOS_TEMPLATE, usuarios=usuarios, erro=f"Já existe um usuário '{username}'.", nome=nome
+                ),
+                400,
+            )
+
+        storage.create_admin_user(conn, username, generate_password_hash(password), nome=nome)
+        usuarios = storage.list_admin_users(conn)
+        conn.close()
+        return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios, sucesso=f"Usuário '{username}' cadastrado.")
+
+    @app.post("/admin/usuarios/<int:user_id>/alternar-ativo")
+    def alternar_ativo_usuario(user_id: int):
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+
+        conn = _connect()
+        usuarios = storage.list_admin_users(conn)
+        alvo = next((u for u in usuarios if u.id == user_id), None)
+        if alvo is None:
+            conn.close()
+            return jsonify({"error": "usuário não encontrado"}), 404
+
+        storage.set_admin_user_ativo(conn, user_id, not alvo.ativo)
+        usuarios = storage.list_admin_users(conn)
+        conn.close()
+        return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios)
 
     @app.route("/pre-analise", methods=["GET", "POST"])
     def pre_analise():

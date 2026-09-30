@@ -43,3 +43,17 @@ class Finding:
     vencimento: str | None
     pago: bool
     status: str
+
+
+@dataclass
+class AdminUser:
+    """Conta individual de acesso ao painel de admin (login por pessoa da
+    equipe, além do usuário/senha "mestre" em ADMIN_USERNAME/ADMIN_PASSWORD).
+    """
+
+    id: int
+    username: str
+    password_hash: str
+    nome: str | None
+    criado_em: str
+    ativo: bool = True

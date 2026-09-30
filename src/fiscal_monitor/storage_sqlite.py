@@ -10,7 +10,7 @@ import secrets
 import sqlite3
 from datetime import datetime, timezone
 
-from src.fiscal_monitor.models import Cnpj, Finding, Tenant
+from src.fiscal_monitor.models import AdminUser, Cnpj, Finding, Tenant
 
 DEFAULT_DB_PATH = "output/fiscal_monitor.db"
 
@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS findings (
     vencimento TEXT,
     pago INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS admin_users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    nome TEXT,
+    criado_em TEXT NOT NULL,
+    ativo INTEGER NOT NULL DEFAULT 1
 );
 """
 
@@ -342,3 +351,39 @@ def findings_by_cnpj_for_tenant(conn: sqlite3.Connection, tenant_id: int) -> lis
         open_findings = [f for f in findings if f.status != "resolvida"]
         result.append((cnpj, open_findings))
     return result
+
+
+def create_admin_user(conn: sqlite3.Connection, username: str, password_hash: str, nome: str | None = None) -> AdminUser:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "INSERT INTO admin_users (username, password_hash, nome, criado_em, ativo) VALUES (?, ?, ?, ?, 1)",
+        (username, password_hash, nome, criado_em),
+    )
+    conn.commit()
+    return AdminUser(id=cursor.lastrowid, username=username, password_hash=password_hash, nome=nome, criado_em=criado_em, ativo=True)  # type: ignore[arg-type]
+
+
+def get_admin_user_by_username(conn: sqlite3.Connection, username: str) -> AdminUser | None:
+    row = conn.execute("SELECT * FROM admin_users WHERE username = ?", (username,)).fetchone()
+    return _row_to_admin_user(row) if row else None
+
+
+def list_admin_users(conn: sqlite3.Connection) -> list[AdminUser]:
+    rows = conn.execute("SELECT * FROM admin_users ORDER BY id").fetchall()
+    return [_row_to_admin_user(row) for row in rows]
+
+
+def set_admin_user_ativo(conn: sqlite3.Connection, user_id: int, ativo: bool) -> None:
+    conn.execute("UPDATE admin_users SET ativo = ? WHERE id = ?", (int(ativo), user_id))
+    conn.commit()
+
+
+def _row_to_admin_user(row: sqlite3.Row) -> AdminUser:
+    return AdminUser(
+        id=row["id"],
+        username=row["username"],
+        password_hash=row["password_hash"],
+        nome=row["nome"],
+        criado_em=row["criado_em"],
+        ativo=bool(row["ativo"]),
+    )

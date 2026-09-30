@@ -454,6 +454,50 @@ outros módulos (`prospecting`, `proposals`, `whatsapp`, etc.) continuam
 sendo CLI local — só o `fiscal_monitor` tem essa camada web pensada pra
 hospedagem.
 
+### Domínio próprio
+
+Pra usar um domínio seu (ex: `app.suaempresa.com.br`) em vez do
+`*.vercel.app` padrão: no projeto Vercel, **Settings → Domains → Add** e
+informe o domínio. A Vercel mostra os registros de DNS (um `CNAME`
+apontando pro Vercel, ou registros `A`/`ALIAS` se for o domínio raiz) —
+adicione esses registros no painel do seu registrador de domínio (onde
+você comprou/registrou o domínio). O HTTPS (certificado SSL) é emitido
+automaticamente pela Vercel assim que o DNS propagar, sem custo e sem
+configuração manual.
+
+### Login de admin e usuários da equipe
+
+Todo o painel (`/tenants`, `/pre-analise`, `/admin/campanhas/*`, etc.) é
+protegido por HTTP Basic Auth (login/senha pedidos pelo próprio
+navegador, não é uma página de login customizada). Duas camadas:
+
+- **Usuário mestre** (`ADMIN_USERNAME`/`ADMIN_PASSWORD`, variável de
+  ambiente) — acesso de emergência/bootstrap, sempre disponível mesmo se
+  o banco de dados cair. É o único jeito de entrar da primeira vez.
+- **Contas individuais por pessoa da equipe** — em `/admin/usuarios`
+  (com o usuário mestre logado), cadastre um usuário/senha pra cada
+  pessoa. Cada um usa seu próprio login pra acessar o mesmo painel; dá
+  pra **desativar o acesso de uma pessoa** (botão "Desativar" na mesma
+  página) sem precisar trocar a senha de todo mundo — por exemplo quando
+  alguém sai da equipe. As senhas ficam guardadas com hash (nunca em
+  texto puro) no mesmo banco (SQLite local ou Postgres em produção).
+
+**Outras proteções já em vigor:**
+
+- HTTPS obrigatório (fornecido automaticamente pela Vercel).
+- Endpoints de cron (`/cron/*`) exigem `CRON_SECRET`, não são acessíveis
+  publicamente.
+- Segredos (tokens de API, senhas) ficam só em variáveis de ambiente
+  (`type: sensitive` no Vercel), nunca commitados no código.
+- `/pre-analise` e o resto do painel exigem login — não são mais
+  públicos.
+
+**Ainda pendente (ação manual, fora do código):** o repositório no
+GitHub está **público** — só o dono da conta consegue trocar isso.
+Settings do repositório → aba **Danger Zone** → **Change visibility** →
+**Make private**. Recomendado fortemente, já que o código (embora sem
+segredos commitados) mostra a arquitetura inteira do produto.
+
 ### Checagem automática agendada (cron)
 
 Sem isso, alguém precisa lembrar de rodar `--check --enviar-whatsapp

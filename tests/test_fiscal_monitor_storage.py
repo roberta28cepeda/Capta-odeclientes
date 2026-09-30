@@ -162,3 +162,39 @@ def test_all_findings_for_cnpj_includes_resolvidas_most_recent_first():
     assert len(historico) == 2
     assert historico[0][2].status == "resolvida"  # mais recente primeiro
     assert historico[1][2].status == "nova"
+
+
+def test_create_and_get_admin_user_by_username():
+    conn = _conn()
+    storage.create_admin_user(conn, "maria", "hash-fake", nome="Maria")
+
+    usuario = storage.get_admin_user_by_username(conn, "maria")
+
+    assert usuario is not None
+    assert usuario.nome == "Maria"
+    assert usuario.password_hash == "hash-fake"
+    assert usuario.ativo is True
+
+
+def test_get_admin_user_by_username_returns_none_when_missing():
+    conn = _conn()
+    assert storage.get_admin_user_by_username(conn, "ninguem") is None
+
+
+def test_list_admin_users_returns_all_in_order():
+    conn = _conn()
+    storage.create_admin_user(conn, "maria", "hash-a")
+    storage.create_admin_user(conn, "joao", "hash-b")
+
+    usuarios = storage.list_admin_users(conn)
+
+    assert [u.username for u in usuarios] == ["maria", "joao"]
+
+
+def test_set_admin_user_ativo_toggles_flag():
+    conn = _conn()
+    usuario = storage.create_admin_user(conn, "maria", "hash-a")
+
+    storage.set_admin_user_ativo(conn, usuario.id, False)
+
+    assert storage.get_admin_user_by_username(conn, "maria").ativo is False

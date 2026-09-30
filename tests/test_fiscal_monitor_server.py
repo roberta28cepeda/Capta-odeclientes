@@ -5,6 +5,7 @@ import tempfile
 from unittest.mock import patch
 
 import pytest
+from werkzeug.security import generate_password_hash
 
 from src.fiscal_monitor import storage
 from src.fiscal_monitor.infosimples import ConsultaDebitosError
@@ -475,3 +476,118 @@ def test_tenant_cannot_access_another_tenants_data_with_own_token(db_path):
     response = application.test_client().get(f"/tenants/{tenant_b.id}?token={tenant_a.acesso_token}")
 
     assert response.status_code == 403
+
+
+def test_individual_admin_user_can_authenticate(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), nome="Maria")
+    conn.close()
+
+    response = app.test_client().get("/tenants", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 200
+
+
+def test_individual_admin_user_wrong_password_rejected(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"))
+    conn.close()
+
+    response = app.test_client().get("/tenants", headers=_basic_auth_header("maria", "senha-errada"))
+
+    assert response.status_code == 401
+
+
+def test_deactivated_admin_user_cannot_authenticate(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    usuario = storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"))
+    storage.set_admin_user_ativo(conn, usuario.id, False)
+    conn.close()
+
+    response = app.test_client().get("/tenants", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 401
+
+
+def test_master_admin_still_works_alongside_individual_users(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    response = app.test_client().get("/tenants", headers=_basic_auth_header("admin", "senha-mestre"))
+    assert response.status_code == 200
+
+
+def test_admin_usuarios_requires_admin(app):
+    response = app.test_client().get("/admin/usuarios")
+    assert response.status_code == 401
+
+
+def test_admin_usuarios_lists_existing_users(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), nome="Maria")
+    conn.close()
+
+    response = app.test_client().get("/admin/usuarios", headers=_basic_auth_header("admin", "senha-mestre"))
+
+    assert response.status_code == 200
+    assert b"maria" in response.data
+
+
+def test_admin_usuarios_post_creates_new_user(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+
+    response = app.test_client().post(
+        "/admin/usuarios",
+        data={"username": "joao", "password": "senha-do-joao", "nome": "João"},
+        headers=_basic_auth_header("admin", "senha-mestre"),
+    )
+
+    assert response.status_code == 200
+    conn = storage.connect(db_path)
+    usuario = storage.get_admin_user_by_username(conn, "joao")
+    assert usuario is not None
+    assert usuario.nome == "João"
+
+
+def test_admin_usuarios_post_rejects_short_password(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+
+    response = app.test_client().post(
+        "/admin/usuarios",
+        data={"username": "joao", "password": "123"},
+        headers=_basic_auth_header("admin", "senha-mestre"),
+    )
+
+    assert response.status_code == 400
+
+
+def test_admin_usuarios_post_rejects_duplicate_username(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"))
+    conn.close()
+
+    response = app.test_client().post(
+        "/admin/usuarios",
+        data={"username": "maria", "password": "outra-senha"},
+        headers=_basic_auth_header("admin", "senha-mestre"),
+    )
+
+    assert response.status_code == 400
+
+
+def test_alternar_ativo_usuario_toggles_status(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    usuario = storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"))
+    conn.close()
+
+    response = app.test_client().post(
+        f"/admin/usuarios/{usuario.id}/alternar-ativo", headers=_basic_auth_header("admin", "senha-mestre")
+    )
+
+    assert response.status_code == 200
+    conn = storage.connect(db_path)
+    assert storage.get_admin_user_by_username(conn, "maria").ativo is False
