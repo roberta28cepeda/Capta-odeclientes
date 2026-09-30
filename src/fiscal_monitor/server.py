@@ -1,6 +1,6 @@
 """Dashboard: lista escritórios (tenants), a carteira de CNPJs de cada um,
-os achados fiscais em aberto, e o formulário de pré-análise pública
-(só CNPJ, sem procuração/e-CAC).
+os achados fiscais em aberto, e o formulário de pré-análise (só CNPJ, sem
+procuração/e-CAC) — restrito a login de admin.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ _TENANTS_TEMPLATE = """
 <title>Monitoramento Fiscal</title>
 <h1>Escritórios monitorados</h1>
 <p><a href="/admin/tenants/novo">+ Cadastrar novo escritório</a></p>
-<p><a href="/pre-analise">Gerar pré-análise pública (só CNPJ, sem procuração) &rarr;</a></p>
+<p><a href="/pre-analise">Gerar pré-análise (só CNPJ, sem procuração) &rarr;</a></p>
 <p><a href="/admin/campanhas/leads">Campanha de prospecção PGFN (leads, templates) &rarr;</a></p>
 <p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
@@ -176,8 +176,8 @@ _PRIVACIDADE_TEMPLATE = """
 </p>
 
 <h2>2. Quais dados coletamos, e de onde</h2>
-<p><strong>Pré-análise pública</strong> (página <code>/pre-analise</code>):
-o CNPJ informado é consultado em tempo real na
+<p><strong>Pré-análise</strong> (página <code>/pre-analise</code>, restrita a
+login de administrador): o CNPJ informado é consultado em tempo real na
 <a href="https://brasilapi.com.br" target="_blank" rel="noopener">BrasilAPI</a>,
 um serviço de terceiros que espelha dados públicos da Receita Federal
 (situação cadastral, natureza jurídica, enquadramento no Simples
@@ -191,7 +191,7 @@ ficam armazenados em nosso banco enquanto o escritório for cliente.</p>
 
 <h2>3. Com quem compartilhamos</h2>
 <ul>
-  <li><strong>BrasilAPI</strong> — recebe o CNPJ digitado na pré-análise pública, pra devolver o dado cadastral público correspondente.</li>
+  <li><strong>BrasilAPI</strong> — recebe o CNPJ digitado na pré-análise, pra devolver o dado cadastral público correspondente.</li>
   <li><strong>Meta (WhatsApp Cloud API)</strong> — usada só se o escritório optar por receber alertas fiscais por WhatsApp; recebe o número de contato cadastrado e o texto do alerta.</li>
 </ul>
 <p>Não vendemos nem compartilhamos dados com terceiros para fins de publicidade.</p>
@@ -299,6 +299,10 @@ def create_app(
 
     @app.route("/pre-analise", methods=["GET", "POST"])
     def pre_analise():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+
         if request.method == "GET":
             return render_template_string(_PRE_ANALISE_FORM_TEMPLATE)
 

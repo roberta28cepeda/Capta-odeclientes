@@ -264,7 +264,7 @@ inspirado nas funcionalidades da [Veri](https://veri.com.br/), mas pensado
 desde já como produto multi-tenant pra vender a outros escritórios, não só
 uso interno.
 
-### Pré-análise fiscal pública (sem procuração, sem e-CAC)
+### Pré-análise fiscal (sem procuração, sem e-CAC — uso interno)
 
 Resolve a dor de abordar um cliente que ainda não quer dar procuração ou
 acesso ao e-CAC: com **só o CNPJ**, consulta dados que já são públicos —
@@ -284,9 +284,11 @@ Gera `output/pre_analise_<cnpj>.pdf`. `--logo` é opcional.
 
 **Também dá pra gerar direto pelo navegador**, sem terminal — útil pra usar
 na hora, numa reunião: suba o dashboard (`--serve`) e acesse
-`/pre-analise`. É um formulário (CNPJ, nome do escritório opcional, logo
-opcional) que baixa o PDF na hora, com validação de dígito verificador do
-CNPJ antes de consultar.
+`/pre-analise` (**exige login de admin** — não é mais uma página pública,
+pra evitar abuso/consulta indevida por quem não tem acesso ao sistema).
+É um formulário (CNPJ, nome do escritório opcional, logo opcional) que
+baixa o PDF na hora, com validação de dígito verificador do CNPJ antes de
+consultar.
 
 **O que isso não traz:** pendências, multas e dívidas fiscais são dado
 privado — exigem procuração eletrônica e acesso ao e-CAC (a parte do
