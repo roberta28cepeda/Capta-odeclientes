@@ -14,6 +14,7 @@ if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.enviro
     from src.campaigns.storage_postgres import (  # noqa: F401
         DEFAULT_DB_PATH,
         add_evento,
+        bulk_create_leads,
         connect,
         create_envio,
         create_lead,
@@ -42,6 +43,7 @@ else:
     from src.campaigns.storage_sqlite import (  # noqa: F401
         DEFAULT_DB_PATH,
         add_evento,
+        bulk_create_leads,
         connect,
         create_envio,
         create_lead,

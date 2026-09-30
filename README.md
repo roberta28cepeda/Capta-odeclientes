@@ -586,6 +586,7 @@ seções correspondentes.
 | `contadores_certificado` | Escritórios contábeis — parceria certificado digital | ✅ texto real |
 | `contadores_tributaria` | Escritórios contábeis — parceria tese tributária | ✅ texto real |
 | `mei_regularizacao` | Regularização de MEI | ⚠️ rascunho `[AJUSTAR]` — falta o ângulo/pitch dessa tese |
+| `industria_tributaria_geral` | Indústria com "Demais débitos - Tributários" (Dívida Ativa, não Simples Nacional — empresas maiores) | ⚠️ rascunho `[AJUSTAR]` — falta o ângulo/pitch dessa tese |
 
 Em todas, o **e-mail inicial** tem o texto real; o **follow-up** (único,
 5 dias depois) de cada tese é rascunho `[AJUSTAR]` (não existia como

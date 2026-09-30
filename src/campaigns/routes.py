@@ -192,18 +192,21 @@ def importar_leads():
         return render_template_string(_IMPORTAR_LEADS_TEMPLATE, resultado="Selecione um arquivo CSV.", teses=_teses_conhecidas(conn)), 400
 
     stream = io.StringIO(csv_file.stream.read().decode("utf-8"))
-    count = 0
+    leads_para_criar = []
     for row in csv.DictReader(stream):
         cnpj = (row.get("cnpj") or "").strip()
         if not cnpj:
             continue
         valor_raw = (row.get("valor_divida") or "").strip()
-        storage.create_lead(
-            conn, cnpj, tese, razao_social=(row.get("razao_social") or "").strip() or None,
-            email=(row.get("email") or "").strip() or None,
-            valor_divida=float(valor_raw) if valor_raw else None,
+        leads_para_criar.append(
+            {
+                "cnpj": cnpj,
+                "razao_social": (row.get("razao_social") or "").strip() or None,
+                "email": (row.get("email") or "").strip() or None,
+                "valor_divida": float(valor_raw) if valor_raw else None,
+            }
         )
-        count += 1
+    count = storage.bulk_create_leads(conn, tese, leads_para_criar) if leads_para_criar else 0
     return render_template_string(
         _IMPORTAR_LEADS_TEMPLATE, resultado=f"{count} lead(s) importado(s) na tese '{tese}'.", teses=_teses_conhecidas(conn)
     )

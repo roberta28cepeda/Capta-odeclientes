@@ -159,6 +159,33 @@ def create_lead(
     return get_lead_by_cnpj(conn, cnpj, tese)  # type: ignore[return-value]
 
 
+def bulk_create_leads(conn, tese: str, leads: list[dict]) -> int:
+    """Importa vários leads de uma vez, numa única transação (uma só ida ao
+    banco via `execute_values`) — usado pra listas grandes da PGFN (dezenas
+    de milhares de linhas), onde inserir um lead por vez seria lento demais.
+    """
+    criado_em = datetime.now(timezone.utc).isoformat()
+    rows = [
+        (item["cnpj"], tese, item.get("razao_social"), item.get("email"), STATUS_ATIVO, criado_em, item.get("valor_divida"))
+        for item in leads
+    ]
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO campanha_leads (cnpj, tese, razao_social, email, status, criado_em, valor_divida)
+            VALUES %s
+            ON CONFLICT (cnpj, tese) DO UPDATE SET
+                razao_social = EXCLUDED.razao_social,
+                email = COALESCE(campanha_leads.email, EXCLUDED.email),
+                valor_divida = COALESCE(EXCLUDED.valor_divida, campanha_leads.valor_divida)
+            """,
+            rows,
+        )
+    conn.commit()
+    return len(rows)
+
+
 def get_lead(conn, lead_id: int) -> Lead | None:
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM campanha_leads WHERE id = %s", (lead_id,))

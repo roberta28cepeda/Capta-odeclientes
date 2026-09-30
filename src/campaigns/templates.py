@@ -219,4 +219,24 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
         },
         TIPOS_FOLLOWUP[0]: _followup_rascunho("REGULARIZAÇÃO MEI"),
     },
+    "industria_tributaria_geral": {
+        TIPO_INICIAL: {
+            "assunto": "[RASCUNHO] {{RAZAO_SOCIAL}} — débito tributário federal",
+            "tag": "DÍVIDA ATIVA DA UNIÃO",
+            "headline": "[AJUSTAR: título da tese de dívida tributária geral (Demais débitos - Tributários) — ainda não recebi o ângulo/pitch.]",
+            "paragrafo1": (
+                "[AJUSTAR] Texto sobre o débito tributário federal da {{RAZAO_SOCIAL}} — preciso do "
+                "ângulo/pitch pra escrever de verdade. Atenção: essa lista é de \"Demais débitos - "
+                "Tributários\", não Simples Nacional — são empresas de porte maior, não use a copy da "
+                "tese industria_ibs_cbs (que fala de Simples Nacional) aqui."
+            ),
+            "paragrafo2": "[AJUSTAR] Segundo parágrafo.",
+            "checklist": list(_CHECKLIST_FOLLOWUP_PADRAO),
+            "italico": "[AJUSTAR] Frase de urgência.",
+            "cta_texto": "QUERO RESOLVER ISSO",
+            "link_cta": _WHATSAPP_LINK,
+            "rodape_nota": _NOTAS_RODAPE_PADRAO,
+        },
+        TIPOS_FOLLOWUP[0]: _followup_rascunho("DÍVIDA ATIVA DA UNIÃO"),
+    },
 }

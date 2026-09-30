@@ -38,6 +38,39 @@ def test_same_cnpj_can_exist_in_two_different_teses():
     assert lead_b.tese == OUTRA_TESE
 
 
+def test_bulk_create_leads_inserts_many_at_once():
+    conn = _conn()
+    leads = [
+        {"cnpj": "11.222.333/0001-44", "razao_social": "Empresa X", "email": None, "valor_divida": 1000.0},
+        {"cnpj": "22.333.444/0001-55", "razao_social": "Empresa Y", "email": "y@exemplo.com", "valor_divida": 2000.0},
+    ]
+
+    count = storage.bulk_create_leads(conn, TESE, leads)
+
+    assert count == 2
+    assert len(storage.list_leads(conn, tese=TESE)) == 2
+    assert storage.get_lead_by_cnpj(conn, "22.333.444/0001-55", TESE).valor_divida == 2000.0
+
+
+def test_bulk_create_leads_upserts_on_conflict():
+    conn = _conn()
+    storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Nome Antigo", email="antigo@exemplo.com")
+
+    storage.bulk_create_leads(
+        conn, TESE, [{"cnpj": "11.222.333/0001-44", "razao_social": "Nome Novo", "email": None, "valor_divida": 500.0}]
+    )
+
+    lead = storage.get_lead_by_cnpj(conn, "11.222.333/0001-44", TESE)
+    assert lead.razao_social == "Nome Novo"
+    assert lead.email == "antigo@exemplo.com"  # não sobrescreve e-mail já preenchido
+    assert lead.valor_divida == 500.0
+
+
+def test_bulk_create_leads_handles_empty_list():
+    conn = _conn()
+    assert storage.bulk_create_leads(conn, TESE, []) == 0
+
+
 def test_create_lead_stores_valor_divida():
     conn = _conn()
     lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, valor_divida=1234.56)
@@ -151,6 +184,7 @@ def test_list_template_teses_includes_all_seeded_teses():
     teses = storage.list_template_teses(conn)
     assert "transportadoras_pgfn" in teses
     assert "mei_regularizacao" in teses
+    assert "industria_tributaria_geral" in teses
 
 
 def test_set_template_overrides_default_and_preserves_checklist():

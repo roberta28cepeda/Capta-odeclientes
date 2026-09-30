@@ -116,6 +116,31 @@ def create_lead(
     return get_lead_by_cnpj(conn, cnpj, tese)  # type: ignore[return-value]
 
 
+def bulk_create_leads(conn: sqlite3.Connection, tese: str, leads: list[dict]) -> int:
+    """Importa vários leads de uma vez, numa única transação — usado pra
+    listas grandes da PGFN (dezenas de milhares de linhas), onde criar um
+    lead por vez (com commit a cada linha) seria lento demais e arriscaria
+    estourar o tempo de execução da function serverless em produção.
+    """
+    criado_em = datetime.now(timezone.utc).isoformat()
+    conn.executemany(
+        """
+        INSERT INTO campanha_leads (cnpj, tese, razao_social, email, status, criado_em, valor_divida)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(cnpj, tese) DO UPDATE SET
+            razao_social = excluded.razao_social,
+            email = COALESCE(campanha_leads.email, excluded.email),
+            valor_divida = COALESCE(excluded.valor_divida, campanha_leads.valor_divida)
+        """,
+        [
+            (item["cnpj"], tese, item.get("razao_social"), item.get("email"), STATUS_ATIVO, criado_em, item.get("valor_divida"))
+            for item in leads
+        ],
+    )
+    conn.commit()
+    return len(leads)
+
+
 def get_lead(conn: sqlite3.Connection, lead_id: int) -> Lead | None:
     row = conn.execute("SELECT * FROM campanha_leads WHERE id = ?", (lead_id,)).fetchone()
     return _row_to_lead(row) if row else None
