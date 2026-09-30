@@ -203,13 +203,16 @@ def test_cron_campanhas_runs_and_sends_pending_leads(app, monkeypatch, campaigns
     conn = campaigns_storage.connect(campaigns_db_path)
     campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
 
-    with patch("src.campaigns.engine.send_email_html") as mock_send:
+    with patch("src.campaigns.engine.send_email_html") as mock_send, patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None
+    ):
         response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
 
     assert response.status_code == 200
     data = response.get_json()
     assert data["enviados"] == 1
     assert data["busca_email"] is None
+    assert data["busca_telefone"] == {"leads_verificados": 1, "encontrados": 0, "erros": []}
     mock_send.assert_called_once()
 
 
@@ -226,7 +229,7 @@ def test_cron_campanhas_runs_email_search_when_exa_key_configured(app, monkeypat
 
     with patch("src.campaigns.engine.buscar_email_por_empresa", return_value="achado@empresax.com.br") as mock_busca, patch(
         "src.campaigns.engine.send_email_html"
-    ) as mock_send:
+    ) as mock_send, patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None):
         response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
 
     assert response.status_code == 200
@@ -234,3 +237,122 @@ def test_cron_campanhas_runs_email_search_when_exa_key_configured(app, monkeypat
     assert data["busca_email"] == {"leads_verificados": 1, "encontrados": 1, "erros": []}
     mock_busca.assert_called_once_with("Empresa X", "EXA_KEY")
     mock_send.assert_called_once()  # já achou o e-mail nessa mesma rodada, então já manda hoje
+
+
+def test_cron_campanhas_sends_whatsapp_digest_when_configured(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+    monkeypatch.setenv("WHATSAPP_EQUIPE_EMAIL", "equipe@exemplo.com")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+
+    with patch("src.campaigns.engine.send_email_html"), patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj", return_value="11912345678"
+    ), patch("src.campaigns.engine.send_email") as mock_send_equipe:
+        response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["resumo_whatsapp_enviado"] is True
+    mock_send_equipe.assert_called_once()
+    assert mock_send_equipe.call_args[0][0] == "equipe@exemplo.com"
+
+
+def test_cron_campanhas_skips_whatsapp_digest_without_env_var(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+
+    with patch("src.campaigns.engine.send_email_html"), patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj", return_value="11912345678"
+    ):
+        response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    data = response.get_json()
+    assert data["resumo_whatsapp_enviado"] is False
+
+
+def test_cartao_whatsapp_requires_admin(app):
+    response = app.test_client().get("/admin/campanhas/whatsapp")
+    assert response.status_code == 401
+
+
+def test_cartao_whatsapp_shows_next_pending_lead(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    campaigns_storage.set_lead_telefone(conn, lead.id, "11912345678")
+
+    response = app.test_client().get("/admin/campanhas/whatsapp", headers=_basic_auth_header("admin", "senha-secreta"))
+
+    assert response.status_code == 200
+    assert b"Empresa X" in response.data
+    assert b"wa.me" in response.data
+
+
+def test_cartao_whatsapp_shows_empty_state_without_pending(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/admin/campanhas/whatsapp", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert response.status_code == 200
+    assert "Nenhum lead pendente".encode() in response.data
+
+
+def test_marcar_contatado_whatsapp_removes_lead_from_cartao(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    campaigns_storage.set_lead_telefone(conn, lead.id, "11912345678")
+
+    response = app.test_client().post(
+        f"/admin/campanhas/whatsapp/{lead.id}/contatado", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+
+    assert response.status_code == 302
+    assert campaigns_storage.leads_pendentes_whatsapp(conn) == []
+
+
+def test_track_open_syncs_first_engagement_with_brevo(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("BREVO_API_KEY", "BREVO_KEY")
+    monkeypatch.setenv("BREVO_ENGAJADOS_LIST_ID", "5")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, email="x@exemplo.com")
+    envio = campaigns_storage.create_envio(conn, lead.id, "inicial")
+
+    with patch("src.campaigns.routes.brevo_client.adicionar_contato_lista") as mock_brevo:
+        app.test_client().get(f"/track/open/{envio.tracking_token}.gif")
+
+    mock_brevo.assert_called_once_with("x@exemplo.com", 5, "BREVO_KEY")
+
+
+def test_track_open_does_not_sync_second_engagement_with_brevo(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("BREVO_API_KEY", "BREVO_KEY")
+    monkeypatch.setenv("BREVO_ENGAJADOS_LIST_ID", "5")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, email="x@exemplo.com")
+    envio = campaigns_storage.create_envio(conn, lead.id, "inicial")
+
+    with patch("src.campaigns.routes.brevo_client.adicionar_contato_lista") as mock_brevo:
+        app.test_client().get(f"/track/open/{envio.tracking_token}.gif")
+        app.test_client().get(f"/track/open/{envio.tracking_token}.gif")
+
+    mock_brevo.assert_called_once()
+
+
+def test_track_open_skips_brevo_sync_without_env_vars(app, campaigns_db_path):
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, email="x@exemplo.com")
+    envio = campaigns_storage.create_envio(conn, lead.id, "inicial")
+
+    with patch("src.campaigns.routes.brevo_client.adicionar_contato_lista") as mock_brevo:
+        app.test_client().get(f"/track/open/{envio.tracking_token}.gif")
+
+    mock_brevo.assert_not_called()

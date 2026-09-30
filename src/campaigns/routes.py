@@ -17,7 +17,8 @@ from datetime import date
 
 from flask import Blueprint, Response, current_app, jsonify, redirect, render_template_string, request
 
-from src.campaigns import engine, storage, tracking
+from src.campaigns import brevo_client, engine, storage, tracking
+from src.campaigns.brevo_client import BrevoSyncError
 from src.campaigns.models import TIPOS_ENVIO
 from src.campaigns.templates import DEFAULT_TEMPLATES
 from src.common.webauth import cron_authorized, require_admin
@@ -43,7 +44,8 @@ _LEADS_TEMPLATE = """
 <title>Campanha — Leads</title>
 <h1>Leads da campanha{% if tese %} — {{ tese }}{% endif %}</h1>
 <p><a href="/admin/campanhas/leads/importar">+ Importar leads (CSV)</a> ·
-   <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a></p>
+   <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a> ·
+   <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a></p>
 <p>Teses:
 {% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}" style="margin-right:10px;{% if t == tese %}font-weight:bold;{% endif %}">{{ t }}</a>{% endfor %}
 <a href="/admin/campanhas/leads">(todas)</a>
@@ -108,6 +110,55 @@ _TEMPLATES_TEMPLATE = """
 </form>
 {% endfor %}
 """
+
+
+_WHATSAPP_CARTAO_TEMPLATE = """
+<!doctype html>
+<title>Cartão WhatsApp — Campanha</title>
+<h1>Cartão de contato via WhatsApp</h1>
+<p><a href="/admin/campanhas/leads">&larr; voltar pros leads</a></p>
+<p>Mostra um lead pendente de cada vez — assim que alguém marca como
+contatado, ele some da fila pra quem mais abrir essa página (evita
+contato duplicado quando várias pessoas usam o mesmo número).</p>
+{% if lead %}
+<div style="border:1px solid #ccc;padding:1.5rem;max-width:420px;border-radius:8px">
+  <h2>{{ lead.razao_social or lead.cnpj }}</h2>
+  <p>CNPJ: {{ lead.cnpj }} — Tese: {{ lead.tese }}</p>
+  {% if lead.valor_divida %}<p>Dívida: R$ {{ "%.2f"|format(lead.valor_divida) }}</p>{% endif %}
+  <p><a href="{{ link_whatsapp }}" target="_blank" rel="noopener">Abrir WhatsApp com mensagem pronta &rarr;</a></p>
+  <form method="post" action="/admin/campanhas/whatsapp/{{ lead.id }}/contatado">
+    <button type="submit">Marquei como contatado</button>
+  </form>
+</div>
+<p>Faltam mais {{ restantes }} lead(s) na fila.</p>
+{% else %}
+<p>Nenhum lead pendente de contato via WhatsApp no momento (sem telefone achado ainda, ou todo mundo já foi contatado).</p>
+{% endif %}
+"""
+
+
+@bp.get("/admin/campanhas/whatsapp")
+def cartao_whatsapp():
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    conn = _connect()
+    pendentes = storage.leads_pendentes_whatsapp(conn)
+    lead = pendentes[0] if pendentes else None
+    link_whatsapp = engine.montar_link_whatsapp(lead) if lead else None
+    return render_template_string(
+        _WHATSAPP_CARTAO_TEMPLATE, lead=lead, link_whatsapp=link_whatsapp, restantes=max(0, len(pendentes) - 1)
+    )
+
+
+@bp.post("/admin/campanhas/whatsapp/<int:lead_id>/contatado")
+def marcar_contatado_whatsapp(lead_id: int):
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    conn = _connect()
+    storage.set_lead_whatsapp_contatado(conn, lead_id)
+    return redirect("/admin/campanhas/whatsapp")
 
 
 @bp.get("/admin/campanhas/leads")
@@ -197,11 +248,35 @@ def salvar_template(tese: str, tipo: str):
     return redirect(f"/admin/campanhas/templates?tese={tese}")
 
 
+def _sincronizar_engajado_brevo(conn, envio) -> None:
+    """Primeiro engajamento (abertura ou clique) daquele envio → sincroniza
+    o e-mail do lead com a lista de "engajados" no Brevo, igual o Apps
+    Script já faz — silencioso se não tiver `BREVO_API_KEY`/
+    `BREVO_ENGAJADOS_LIST_ID` configurados, e nunca trava o rastreio se o
+    Brevo falhar (é um efeito colateral, não o propósito do endpoint).
+    """
+    api_key = os.environ.get("BREVO_API_KEY")
+    list_id = os.environ.get("BREVO_ENGAJADOS_LIST_ID")
+    if not api_key or not list_id:
+        return
+    ja_teve_evento = bool(storage.eventos_do_envio(conn, envio.id))
+    if ja_teve_evento:
+        return
+    lead = storage.get_lead(conn, envio.lead_id)
+    if not lead or not lead.email:
+        return
+    try:
+        brevo_client.adicionar_contato_lista(lead.email, int(list_id), api_key)
+    except BrevoSyncError:
+        pass
+
+
 @bp.get("/track/open/<token>.gif")
 def track_open(token: str):
     conn = _connect()
     envio = storage.get_envio_by_token(conn, token)
     if envio is not None:
+        _sincronizar_engajado_brevo(conn, envio)
         storage.add_evento(conn, envio.id, "open")
     return Response(tracking.PIXEL_GIF, mimetype="image/gif")
 
@@ -212,6 +287,7 @@ def track_click(token: str):
     conn = _connect()
     envio = storage.get_envio_by_token(conn, token)
     if envio is not None:
+        _sincronizar_engajado_brevo(conn, envio)
         storage.add_evento(conn, envio.id, "click", url=destino)
     return redirect(destino)
 
@@ -235,9 +311,21 @@ def cron_rodar():
 
     exa_api_key = os.environ.get("EXA_API_KEY")
     busca_email = engine.buscar_emails_pendentes(conn, exa_api_key) if exa_api_key else None
+    busca_telefone = engine.buscar_telefones_pendentes(conn)
 
     resultado = engine.rodar_diario(conn, base_url, smtp_host, int(smtp_port), smtp_username, smtp_password, smtp_from=smtp_from)
+    leads_enviados_hoje = resultado.pop("leads_enviados")
     resultado["busca_email"] = busca_email
+    resultado["busca_telefone"] = busca_telefone
+
+    whatsapp_equipe_email = os.environ.get("WHATSAPP_EQUIPE_EMAIL")
+    leads_com_telefone = [lead for lead in leads_enviados_hoje if lead.telefone]
+    if whatsapp_equipe_email and leads_com_telefone:
+        engine.enviar_resumo_whatsapp_equipe(
+            conn, leads_com_telefone, whatsapp_equipe_email, base_url, smtp_host, int(smtp_port), smtp_username,
+            smtp_password, smtp_from=smtp_from,
+        )
+    resultado["resumo_whatsapp_enviado"] = bool(whatsapp_equipe_email and leads_com_telefone)
 
     relatorio_enviado = False
     if date.today().weekday() == 0:  # segunda-feira

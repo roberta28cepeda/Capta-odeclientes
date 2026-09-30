@@ -533,11 +533,15 @@ isso aqui é ferramenta de prospecção interna da Leactis), mas hospedado
 no mesmo app Flask/projeto Vercel, reaproveitando o mesmo Postgres e SMTP.
 
 Fluxo por tese: importa a lista de CNPJs daquela tese → busca o e-mail de
-cada empresa via busca na web (quando ainda não tem) → manda um e-mail
-inicial → manda até 3 follow-ups, um a cada 3 dias, pros que não
-converteram → registra abertura (pixel invisível) e clique no botão
-(WhatsApp) de cada envio → manda um relatório por e-mail toda
-segunda-feira com esses números (por tese e no total) da semana anterior.
+cada empresa via busca na web (quando ainda não tem) → busca o telefone
+via ReceitaWS (quando ainda não tem) → manda um e-mail inicial (HTML, com
+o design da Leactis) → 5 dias depois, pra quem não converteu, manda **um**
+follow-up em texto puro (sem HTML, de propósito, pra soar pessoal — mesma
+cadência do Apps Script que já rodava antes) → registra abertura (pixel
+invisível) e clique no botão (WhatsApp) de cada envio, sincronizando com
+uma lista de "engajados" no Brevo (opcional) → manda um relatório por
+e-mail toda segunda-feira com esses números (por tese e no total) da
+semana anterior.
 
 **Limite diário por tese:** cada tese manda no máximo 10 e-mails por dia
 (inicial + follow-up somados) — mesmo limite que já era usado antes,
@@ -562,6 +566,16 @@ buscas/mês). A Exa continua sem pedir cartão:
    crédito do mês acabar a busca simplesmente para de funcionar até o mês
    seguinte renovar (nunca gera cobrança sem cartão).
 
+A busca de **telefone** usa a **ReceitaWS** (`receitaws.com.br`), gratuita
+e sem cadastro — não precisa configurar nada, roda sozinha no cron diário.
+O plano free tem limite de 3 consultas por minuto: quando bate nesse
+limite, o lote pára naquele lead e continua no próximo cron (o mesmo
+comportamento do enriquecimento por hora que já existia).
+
+O **resumo diário de leads pra WhatsApp** (ver seção "WhatsApp" abaixo) e
+a **sincronização com o Brevo** são opcionais — variáveis explicadas nas
+seções correspondentes.
+
 ### Teses já cadastradas
 
 | Tese (slug) | Público | Status do texto |
@@ -573,9 +587,10 @@ buscas/mês). A Exa continua sem pedir cartão:
 | `contadores_tributaria` | Escritórios contábeis — parceria tese tributária | ✅ texto real |
 | `mei_regularizacao` | Regularização de MEI | ⚠️ rascunho `[AJUSTAR]` — falta o ângulo/pitch dessa tese |
 
-Em todas, o **e-mail inicial** tem o texto real; os **3 follow-ups** de
-cada tese são rascunho `[AJUSTAR]` (não existiam antes) — escreva o texto
-de verdade em `/admin/campanhas/templates?tese=<slug>` antes de ativar.
+Em todas, o **e-mail inicial** tem o texto real; o **follow-up** (único,
+5 dias depois) de cada tese é rascunho `[AJUSTAR]` (não existia como
+e-mail estruturado antes) — escreva o texto de verdade em
+`/admin/campanhas/templates?tese=<slug>` antes de ativar.
 
 ### Uso (CLI, local)
 
@@ -595,15 +610,47 @@ diferentes (planilhas separadas), tratado como lead independente em cada.
 
 - `/admin/campanhas/leads?tese=<slug>` — lista de leads daquela tese (ou de todas, sem o parâmetro).
 - `/admin/campanhas/leads/importar` — importa CSV pra uma tese (escolhida no formulário) direto pelo navegador.
-- `/admin/campanhas/templates?tese=<slug>` — edita cada campo do e-mail (tag, título, parágrafos, checklist, frase de urgência, texto/link do botão, nota de rodapé) daquela tese, pros 4 tipos (inicial + 3 follow-ups). Mesmo design visual da Leactis sempre, só o conteúdo muda.
-- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): se `EXA_API_KEY` estiver configurada, primeiro busca e-mail pros leads que ainda não têm (de todas as teses); depois roda o envio do dia pra todo lead pendente, respeitando o limite de 10/dia por tese; e às segundas-feiras também dispara o relatório semanal (com detalhamento por tese) pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 9 * * *`, todo dia às 9h UTC) — tudo automático, sem precisar rodar nada pelo terminal em produção.
+- `/admin/campanhas/templates?tese=<slug>` — edita cada campo do e-mail (tag, título, parágrafos, checklist, frase de urgência, texto/link do botão, nota de rodapé) daquela tese, pros 2 tipos (inicial + follow-up). Mesmo design visual da Leactis sempre no inicial; o follow-up sai como texto puro (só os campos de texto do template são usados, sem HTML).
+- `/admin/campanhas/whatsapp` — o "cartão" de contato: mostra um lead pendente de WhatsApp por vez (com telefone já achado), com o link `wa.me` pronto e um botão "marquei como contatado" — ver seção "WhatsApp" abaixo.
+- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): busca e-mail pros leads que ainda não têm (se `EXA_API_KEY` configurada) e telefone via ReceitaWS (sempre, é gratuita); roda o envio do dia pra todo lead pendente, respeitando o limite de 10/dia por tese; manda o resumo de WhatsApp pra equipe (se `WHATSAPP_EQUIPE_EMAIL` configurada); e às segundas-feiras também dispara o relatório semanal (com detalhamento por tese) pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 12 * * *`, meio-dia UTC = 9h em Brasília) — tudo automático, sem precisar rodar nada pelo terminal em produção.
+
+### WhatsApp (nunca automático, por decisão de política)
+
+O envio de WhatsApp em si **nunca** é automático — mandar a primeira
+mensagem comercial fria por WhatsApp sem consentimento prévio do
+destinatário fere a política de mensagens da Meta, e o risco real é o
+número da Leactis ser banido. Em vez disso, o sistema automatiza só a
+preparação:
+
+1. Busca o telefone de cada lead via ReceitaWS (automático, no cron diário).
+2. Depois do envio de e-mail do dia, se `WHATSAPP_EQUIPE_EMAIL` estiver
+   configurada, manda um e-mail resumo pra essa caixa com os leads do dia
+   que têm telefone, cada um com um link `wa.me` já com mensagem
+   pré-escrita.
+3. Alguém da equipe abre `/admin/campanhas/whatsapp` (o "cartão"), clica
+   no link do lead atual pra abrir o WhatsApp de verdade e manda a
+   mensagem manualmente, depois marca "marquei como contatado" — o lead
+   some da fila pra quem mais abrir a página depois (evita duas pessoas
+   mandarem mensagem pro mesmo lead quando o número é compartilhado).
+
+### Sincronização com o Brevo (opcional)
+
+Com `BREVO_API_KEY` e `BREVO_ENGAJADOS_LIST_ID` configuradas, todo
+primeiro engajamento (abertura ou clique) de um e-mail da campanha
+sincroniza o e-mail do lead com essa lista no Brevo — mesmo mecanismo já
+usado hoje, pra depois mandar artigo do blog pra quem demonstrou
+interesse real (esse envio do artigo em si roda fora deste módulo). Sem
+essas variáveis, o rastreio de abertura/clique continua funcionando
+normal, só sem sincronizar com o Brevo.
 
 ### O que não faz (por enquanto)
 
-- **Não detecta resposta do lead** pra parar a sequência — os follow-ups
-  seguem o cronograma fixo (3 no total) independente de o lead ter
-  respondido ou não. Parar manualmente significa mudar o `status` do lead
-  pra `pausado` direto no banco (ainda sem botão no dashboard pra isso).
+- **Não detecta resposta do lead** pra parar a sequência — o follow-up
+  sai no dia certo independente de o lead ter respondido ou não. Parar
+  manualmente significa mudar o `status` do lead pra `pausado` direto no
+  banco (ainda sem botão no dashboard pra isso).
+- **A mensagem de WhatsApp é genérica** — não muda por tese como o e-mail
+  muda; é um texto único usado pra qualquer lead com telefone.
 - **A busca de e-mail é best-effort** — nem toda empresa tem e-mail
   público achável via busca; CNPJ sem e-mail encontrado fica sem contato
   (não trava o restante do lote).

@@ -27,6 +27,8 @@ CREATE TABLE IF NOT EXISTS campanha_leads (
     status TEXT NOT NULL DEFAULT 'ativo',
     criado_em TEXT NOT NULL,
     valor_divida REAL,
+    telefone TEXT,
+    whatsapp_contatado_em TEXT,
     UNIQUE(cnpj, tese)
 );
 
@@ -155,10 +157,49 @@ def set_lead_email(conn: sqlite3.Connection, lead_id: int, email: str) -> None:
     conn.commit()
 
 
+def leads_sem_telefone(conn: sqlite3.Connection, tese: str | None = None) -> list[Lead]:
+    if tese is None:
+        rows = conn.execute(
+            "SELECT * FROM campanha_leads WHERE status = 'ativo' AND (telefone IS NULL OR telefone = '') ORDER BY id"
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM campanha_leads WHERE status = 'ativo' AND tese = ? AND (telefone IS NULL OR telefone = '') ORDER BY id",
+            (tese,),
+        ).fetchall()
+    return [_row_to_lead(row) for row in rows]
+
+
+def set_lead_telefone(conn: sqlite3.Connection, lead_id: int, telefone: str) -> None:
+    conn.execute("UPDATE campanha_leads SET telefone = ? WHERE id = ?", (telefone, lead_id))
+    conn.commit()
+
+
+def leads_pendentes_whatsapp(conn: sqlite3.Connection) -> list[Lead]:
+    """Leads com telefone já achado e ainda não marcados como contatados via
+    WhatsApp — fila do "cartão" (`/admin/campanhas/whatsapp`), um por vez.
+    """
+    rows = conn.execute(
+        """
+        SELECT * FROM campanha_leads
+        WHERE status = 'ativo' AND telefone IS NOT NULL AND telefone != '' AND whatsapp_contatado_em IS NULL
+        ORDER BY id
+        """
+    ).fetchall()
+    return [_row_to_lead(row) for row in rows]
+
+
+def set_lead_whatsapp_contatado(conn: sqlite3.Connection, lead_id: int) -> None:
+    contatado_em = datetime.now(timezone.utc).isoformat()
+    conn.execute("UPDATE campanha_leads SET whatsapp_contatado_em = ? WHERE id = ?", (contatado_em, lead_id))
+    conn.commit()
+
+
 def _row_to_lead(row: sqlite3.Row) -> Lead:
     return Lead(
         id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],
         status=row["status"], criado_em=row["criado_em"], valor_divida=row["valor_divida"],
+        telefone=row["telefone"], whatsapp_contatado_em=row["whatsapp_contatado_em"],
     )
 
 

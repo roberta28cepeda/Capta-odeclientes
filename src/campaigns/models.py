@@ -17,10 +17,12 @@ STATUS_PAUSADO = "pausado"
 STATUS_INVALIDO = "invalido"
 
 TIPO_INICIAL = "inicial"
-TIPOS_FOLLOWUP = ["followup_1", "followup_2", "followup_3"]
+# Um único follow-up, 5 dias depois do inicial — mesma cadência do Apps
+# Script já em produção (nunca foram 3 follow-ups por lá).
+TIPOS_FOLLOWUP = ["followup_1"]
 TIPOS_ENVIO = [TIPO_INICIAL, *TIPOS_FOLLOWUP]
 
-DIAS_ENTRE_FOLLOWUPS = 3
+DIAS_ENTRE_FOLLOWUPS = 5
 
 # Total de e-mails (inicial + follow-up somados) que uma tese pode mandar
 # por dia — mesmo limite que o Apps Script já usava, pra não estourar
@@ -38,6 +40,8 @@ class Lead:
     status: str
     criado_em: str
     valor_divida: float | None = None
+    telefone: str | None = None
+    whatsapp_contatado_em: str | None = None
 
 
 @dataclass

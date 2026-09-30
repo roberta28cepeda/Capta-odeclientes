@@ -4,7 +4,8 @@ from unittest.mock import patch
 from src.campaigns import storage
 from src.campaigns import engine
 from src.campaigns.email_finder import EmailFinderError
-from src.campaigns.models import TIPO_INICIAL, LIMITE_ENVIOS_POR_TESE_POR_DIA
+from src.campaigns.models import Lead, TIPO_INICIAL, LIMITE_ENVIOS_POR_TESE_POR_DIA
+from src.campaigns.phone_finder import PhoneFinderError
 
 TESE = "transportadoras_pgfn"
 OUTRA_TESE = "contadores_certificado"
@@ -45,11 +46,20 @@ def test_leads_para_enviar_hoje_excludes_lead_sent_recently():
     assert engine.leads_para_enviar_hoje(conn) == []
 
 
-def test_leads_para_enviar_hoje_includes_followup_after_3_days():
+def test_leads_para_enviar_hoje_excludes_followup_before_5_days():
     conn = _conn()
     lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, email="x@exemplo.com")
     envio = storage.create_envio(conn, lead.id, TIPO_INICIAL)
     _envelhecer_envio(conn, envio, 4)
+
+    assert engine.leads_para_enviar_hoje(conn) == []
+
+
+def test_leads_para_enviar_hoje_includes_followup_after_5_days():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, email="x@exemplo.com")
+    envio = storage.create_envio(conn, lead.id, TIPO_INICIAL)
+    _envelhecer_envio(conn, envio, 5)
 
     resultado = engine.leads_para_enviar_hoje(conn)
     assert resultado == [(lead, "followup_1")]
@@ -58,9 +68,21 @@ def test_leads_para_enviar_hoje_includes_followup_after_3_days():
 def test_leads_para_enviar_hoje_excludes_lead_after_last_followup():
     conn = _conn()
     lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, email="x@exemplo.com")
-    for tipo in [TIPO_INICIAL, "followup_1", "followup_2", "followup_3"]:
+    for tipo in [TIPO_INICIAL, "followup_1"]:
         envio = storage.create_envio(conn, lead.id, tipo)
         _envelhecer_envio(conn, envio, 10)
+
+    assert engine.leads_para_enviar_hoje(conn) == []
+
+
+def test_leads_para_enviar_hoje_ignores_envio_de_tipo_obsoleto():
+    """Lead que já recebeu followup_2/followup_3 numa versão antiga da
+    cadência (3 follow-ups) não deve gerar erro nem receber mais nada.
+    """
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, email="x@exemplo.com")
+    envio = storage.create_envio(conn, lead.id, "followup_2")
+    _envelhecer_envio(conn, envio, 10)
 
     assert engine.leads_para_enviar_hoje(conn) == []
 
@@ -215,3 +237,114 @@ def test_enviar_relatorio_semanal_sends_email_with_report_body():
 
     mock_send.assert_called_once()
     assert mock_send.call_args[0][0] == "admin@exemplo.com"
+
+
+def test_enviar_para_lead_followup_uses_plain_text_not_html():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    storage.create_envio(conn, lead.id, TIPO_INICIAL)
+
+    with patch("src.campaigns.engine.send_email") as mock_send, patch(
+        "src.campaigns.engine.send_email_html"
+    ) as mock_send_html:
+        engine.enviar_para_lead(conn, lead, "followup_1", "https://exemplo.com", "smtp.host", 587, "user", "pass")
+
+    mock_send.assert_called_once()
+    mock_send_html.assert_not_called()
+    to, subject, corpo = mock_send.call_args[0][:3]
+    assert to == "x@exemplo.com"
+    assert "Empresa X" in subject
+    assert "<" not in corpo  # texto puro, sem tag HTML nenhuma
+
+
+def test_rodar_diario_returns_leads_enviados_for_whatsapp_digest():
+    conn = _conn()
+    storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+
+    with patch("src.campaigns.engine.send_email_html"):
+        resultado = engine.rodar_diario(conn, "https://exemplo.com", "smtp.host", 587, "user", "pass")
+
+    assert len(resultado["leads_enviados"]) == 1
+    assert resultado["leads_enviados"][0].cnpj == "11.222.333/0001-44"
+
+
+def test_buscar_telefones_pendentes_sets_telefone_for_leads_without_one():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y", email="ja@exemplo.com")
+    storage.set_lead_telefone(conn, storage.get_lead(conn, 2).id, "1122223333")
+
+    with patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value="1155554444") as mock_busca:
+        resultado = engine.buscar_telefones_pendentes(conn)
+
+    mock_busca.assert_called_once_with("11.222.333/0001-44")
+    assert resultado == {"leads_verificados": 1, "encontrados": 1, "erros": []}
+    assert storage.get_lead(conn, lead.id).telefone == "1155554444"
+
+
+def test_buscar_telefones_pendentes_stops_on_rate_limit_error():
+    conn = _conn()
+    storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y")
+
+    with patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj",
+        side_effect=PhoneFinderError("limite de consultas por minuto atingido"),
+    ) as mock_busca:
+        resultado = engine.buscar_telefones_pendentes(conn)
+
+    mock_busca.assert_called_once()  # parou no primeiro erro, não tentou o segundo lead
+    assert resultado["leads_verificados"] == 0
+    assert len(resultado["erros"]) == 1
+
+
+def test_montar_link_whatsapp_normalizes_numero_and_includes_mensagem():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese=TESE, razao_social="Empresa X", email=None, status="ativo",
+        criado_em="", valor_divida=1500.0, telefone="(11) 91234-5678",
+    )
+
+    link = engine.montar_link_whatsapp(lead)
+
+    assert link.startswith("https://wa.me/5511912345678?text=")
+    assert "Empresa" in link
+
+
+def test_montar_link_whatsapp_returns_none_without_telefone():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese=TESE, razao_social="Empresa X", email=None, status="ativo",
+        criado_em="", telefone=None,
+    )
+    assert engine.montar_link_whatsapp(lead) is None
+
+
+def test_montar_resumo_whatsapp_lists_leads_with_links():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese=TESE, razao_social="Empresa X", email=None, status="ativo",
+        criado_em="", telefone="11912345678",
+    )
+
+    resumo = engine.montar_resumo_whatsapp([lead], "https://exemplo.com")
+
+    assert "Empresa X" in resumo
+    assert "wa.me" in resumo
+    assert "https://exemplo.com/admin/campanhas/whatsapp" in resumo
+
+
+def test_montar_resumo_whatsapp_handles_no_leads():
+    resumo = engine.montar_resumo_whatsapp([], "https://exemplo.com")
+    assert "Nenhum lead" in resumo
+
+
+def test_enviar_resumo_whatsapp_equipe_sends_email():
+    conn = _conn()
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese=TESE, razao_social="Empresa X", email=None, status="ativo",
+        criado_em="", telefone="11912345678",
+    )
+
+    with patch("src.campaigns.engine.send_email") as mock_send:
+        engine.enviar_resumo_whatsapp_equipe(conn, [lead], "equipe@exemplo.com", "https://exemplo.com", "smtp.host", 587, "user", "pass")
+
+    mock_send.assert_called_once()
+    assert mock_send.call_args[0][0] == "equipe@exemplo.com"

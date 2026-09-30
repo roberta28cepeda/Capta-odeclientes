@@ -7,6 +7,7 @@ CRON_SECRET) faz o mesmo que `--enviar-diario` + `--relatorio-semanal`
 Uso:
     python -m src.campaigns.cli --import-leads --tese transportadoras_pgfn --csv leads_transportadoras.csv
     python -m src.campaigns.cli --buscar-emails
+    python -m src.campaigns.cli --buscar-telefones
     python -m src.campaigns.cli --enviar-diario --base-url https://capta-fiscal-monitor.vercel.app
     python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.com.br
 """
@@ -29,6 +30,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--import-leads", action="store_true", help="Importa leads de um CSV (cnpj,razao_social,email)")
     mode.add_argument("--buscar-emails", action="store_true", help="Busca e-mail via Google pros leads sem e-mail")
+    mode.add_argument("--buscar-telefones", action="store_true", help="Busca telefone via ReceitaWS pros leads sem telefone")
     mode.add_argument("--enviar-diario", action="store_true", help="Roda o envio do dia (inicial/follow-up)")
     mode.add_argument("--relatorio-semanal", action="store_true", help="Envia o relatório de abertura/clique dos últimos 7 dias")
 
@@ -82,6 +84,13 @@ def main(argv: list[str] | None = None) -> int:
                 storage.set_lead_email(conn, lead.id, email)
                 encontrados += 1
         print(f"{encontrados}/{len(leads)} lead(s) com e-mail encontrado.")
+        return 0
+
+    if args.buscar_telefones:
+        resultado = engine.buscar_telefones_pendentes(conn)
+        print(f"{resultado['encontrados']}/{resultado['leads_verificados']} lead(s) com telefone encontrado.")
+        for erro in resultado["erros"]:
+            print(f"  erro: {erro['erro']}", file=sys.stderr)
         return 0
 
     if args.enviar_diario:

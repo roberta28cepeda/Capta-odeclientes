@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
+from urllib.parse import quote
 
 from src.campaigns import html_shell, storage, tracking
 from src.campaigns.email_finder import EmailFinderError, buscar_email_por_empresa
@@ -21,6 +22,7 @@ from src.campaigns.models import (
     TIPO_INICIAL,
     TIPOS_ENVIO,
 )
+from src.campaigns.phone_finder import PhoneFinderError, buscar_telefone_por_cnpj
 from src.fiscal_monitor.email_client import send_email, send_email_html
 
 _TAG_HTML_RE = re.compile(r"<[^>]+>")
@@ -28,12 +30,14 @@ _TAG_HTML_RE = re.compile(r"<[^>]+>")
 
 def _proximo_tipo_envio(envios: list[Envio]) -> str | None:
     """Dado o histórico de envios de um lead, retorna o próximo tipo a
-    mandar, ou None se já mandou tudo (inicial + todos os follow-ups) ou se
-    ainda não passou tempo suficiente desde o último envio.
+    mandar, ou None se já mandou tudo (inicial + follow-up) ou se ainda não
+    passou tempo suficiente desde o último envio.
     """
     if not envios:
         return TIPO_INICIAL
     ultimo = envios[-1]
+    if ultimo.tipo not in TIPOS_ENVIO:
+        return None  # tipo de uma versão antiga da cadência (ex: followup_2/3) — não manda mais nada
     indice_atual = TIPOS_ENVIO.index(ultimo.tipo)
     if indice_atual + 1 >= len(TIPOS_ENVIO):
         return None  # já mandou o último follow-up
@@ -103,6 +107,10 @@ def enviar_para_lead(
     smtp_password: str,
     smtp_from: str | None = None,
 ) -> None:
+    """Manda o e-mail inicial (HTML com o design da marca) ou o follow-up
+    (texto puro, de propósito, pra soar pessoal — mesmo padrão do Apps
+    Script: nunca um follow-up com o mesmo visual do e-mail inicial).
+    """
     template = storage.get_template(conn, lead.tese, tipo)
     if template is None:
         raise RuntimeError(f"Template '{tipo}' da tese '{lead.tese}' não encontrado.")
@@ -121,22 +129,32 @@ def enviar_para_lead(
     italico = _substituir_placeholders(template.italico, contexto)
 
     cta_url = tracking.click_url(base_url, envio.tracking_token, template.link_cta)
-    pixel = tracking.pixel_img_tag(base_url, envio.tracking_token)
 
-    corpo_html = html_shell.render_email_html(
-        tag=template.tag, headline=headline, paragrafo1=paragrafo1, paragrafo2=paragrafo2,
-        checklist=template.checklist, italico=italico, cta_texto=template.cta_texto, cta_url=cta_url,
-        rodape_nota=template.rodape_nota, pixel_html=pixel,
-    )
-    corpo_texto = (
-        f"{_remover_tags_html(paragrafo1)}\n\n{_remover_tags_html(paragrafo2)}\n\n"
-        f"{template.cta_texto}: {cta_url}"
-    )
-
-    send_email_html(
-        lead.email, assunto, corpo_texto, corpo_html, smtp_host, smtp_port, smtp_username, smtp_password,
-        smtp_from=smtp_from,
-    )
+    if tipo == TIPO_INICIAL:
+        pixel = tracking.pixel_img_tag(base_url, envio.tracking_token)
+        corpo_html = html_shell.render_email_html(
+            tag=template.tag, headline=headline, paragrafo1=paragrafo1, paragrafo2=paragrafo2,
+            checklist=template.checklist, italico=italico, cta_texto=template.cta_texto, cta_url=cta_url,
+            rodape_nota=template.rodape_nota, pixel_html=pixel,
+        )
+        corpo_texto = (
+            f"{_remover_tags_html(paragrafo1)}\n\n{_remover_tags_html(paragrafo2)}\n\n"
+            f"{template.cta_texto}: {cta_url}"
+        )
+        send_email_html(
+            lead.email, assunto, corpo_texto, corpo_html, smtp_host, smtp_port, smtp_username, smtp_password,
+            smtp_from=smtp_from,
+        )
+    else:
+        corpo_texto = "\n\n".join(
+            texto for texto in (
+                _remover_tags_html(headline), _remover_tags_html(paragrafo1), _remover_tags_html(paragrafo2),
+                _remover_tags_html(italico), f"{template.cta_texto}: {cta_url}",
+            ) if texto.strip()
+        )
+        send_email(
+            lead.email, assunto, corpo_texto, smtp_host, smtp_port, smtp_username, smtp_password, smtp_from=smtp_from
+        )
 
 
 def rodar_diario(
@@ -146,17 +164,96 @@ def rodar_diario(
     """Roda o envio do dia pra todos os leads que precisam de contato,
     respeitando o limite diário por tese — erro num lead não trava os
     demais, fica registrado no resultado.
+
+    `leads_enviados` traz os objetos `Lead` de quem recebeu e-mail agora
+    (usado só internamente, pra montar o resumo de WhatsApp da equipe — não
+    é serializável em JSON, quem chamar isso direto num endpoint precisa
+    tirar essa chave do dicionário antes de devolver a resposta).
     """
     leads_e_tipos = leads_para_enviar_hoje(conn)
     enviados = 0
     erros = []
+    leads_enviados: list[Lead] = []
     for lead, tipo in leads_e_tipos:
         try:
             enviar_para_lead(conn, lead, tipo, base_url, smtp_host, smtp_port, smtp_username, smtp_password, smtp_from=smtp_from)
             enviados += 1
+            leads_enviados.append(lead)
         except Exception as exc:
             erros.append({"lead_id": lead.id, "cnpj": lead.cnpj, "tese": lead.tese, "erro": str(exc)})
-    return {"leads_verificados": len(leads_e_tipos), "enviados": enviados, "erros": erros}
+    return {"leads_verificados": len(leads_e_tipos), "enviados": enviados, "erros": erros, "leads_enviados": leads_enviados}
+
+
+def buscar_telefones_pendentes(conn) -> dict:
+    """Busca o telefone de cada lead ativo (de qualquer tese) que ainda não
+    tem um cadastrado, via ReceitaWS — pára assim que bate no limite de
+    consultas por minuto da API gratuita, em vez de insistir; o resto fica
+    pendente pro próximo cron (igual o enriquecimento por hora do Apps
+    Script, só que aqui roda dentro do mesmo cron diário).
+    """
+    leads = storage.leads_sem_telefone(conn)
+    verificados = 0
+    encontrados = 0
+    erros = []
+    for lead in leads:
+        try:
+            telefone = buscar_telefone_por_cnpj(lead.cnpj)
+        except PhoneFinderError as exc:
+            erros.append({"lead_id": lead.id, "cnpj": lead.cnpj, "tese": lead.tese, "erro": str(exc)})
+            break  # provavelmente rate limit — não adianta insistir nos próximos
+        verificados += 1
+        if telefone:
+            storage.set_lead_telefone(conn, lead.id, telefone)
+            encontrados += 1
+    return {"leads_verificados": verificados, "encontrados": encontrados, "erros": erros}
+
+
+def montar_link_whatsapp(lead: Lead) -> str | None:
+    """Link `wa.me` com mensagem pré-escrita pra equipe mandar a primeira
+    mensagem pro lead — nunca automático (ver `README.md`, decisão de
+    política: mandar a primeira mensagem comercial fria por WhatsApp sem
+    consentimento fere a política da Meta e arrisca banir o número).
+    """
+    if not lead.telefone:
+        return None
+    numero = re.sub(r"\D", "", lead.telefone)
+    if not numero:
+        return None
+    if not numero.startswith("55"):
+        numero = f"55{numero}"
+    nome = lead.razao_social or lead.cnpj
+    mensagem = (
+        f"Olá! Aqui é da Leactis. Vi que a {nome} está na Lista de Devedores da PGFN"
+        + (f", com uma pendência de R$ {_formatar_valor_brl(lead.valor_divida)}" if lead.valor_divida else "")
+        + " e gostaria de conversar sobre como resolver isso. Podemos falar?"
+    )
+    return f"https://wa.me/{numero}?text={quote(mensagem)}"
+
+
+def montar_resumo_whatsapp(leads: list[Lead], base_url: str) -> str:
+    if not leads:
+        return "Nenhum lead com telefone pra contato via WhatsApp hoje."
+    linhas = ["Leads de hoje com telefone pra contato via WhatsApp:", ""]
+    for lead in leads:
+        nome = lead.razao_social or lead.cnpj
+        linhas.append(f"- {nome} ({lead.cnpj}, {lead.tese}): {montar_link_whatsapp(lead)}")
+    linhas.append("")
+    linhas.append(
+        f"Ou usa o cartão pra ir passando um lead de cada vez (evita duplicar contato): "
+        f"{base_url}/admin/campanhas/whatsapp"
+    )
+    return "\n".join(linhas)
+
+
+def enviar_resumo_whatsapp_equipe(
+    conn, leads: list[Lead], destinatario: str, base_url: str, smtp_host: str, smtp_port: int, smtp_username: str,
+    smtp_password: str, smtp_from: str | None = None,
+) -> None:
+    corpo = montar_resumo_whatsapp(leads, base_url)
+    send_email(
+        destinatario, "Leads de hoje pra WhatsApp — campanha", corpo, smtp_host, smtp_port, smtp_username,
+        smtp_password, smtp_from=smtp_from,
+    )
 
 
 def buscar_emails_pendentes(conn, api_key: str) -> dict:

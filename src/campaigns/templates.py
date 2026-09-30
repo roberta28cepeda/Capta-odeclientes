@@ -12,7 +12,9 @@ Placeholders aceitos em tag/headline/paragrafo1/paragrafo2/italico:
 {{RAZAO_SOCIAL}}, {{CNPJ}}, {{VALOR_DIVIDA}} (só faz sentido pra quem usa).
 
 Só o e-mail "inicial" de cada tese tem o texto definitivo (vindo do Apps
-Script); os follow-ups são rascunho [AJUSTAR], porque não existiam antes.
+Script); o follow-up (único, 5 dias depois) é rascunho [AJUSTAR], porque
+não existia como e-mail estruturado antes — no Apps Script real é texto
+puro (sem HTML), reforçando o mesmo risco do e-mail inicial.
 """
 
 from __future__ import annotations
@@ -31,12 +33,15 @@ _CHECKLIST_FOLLOWUP_PADRAO = [
 ]
 
 
-def _followup_rascunho(numero: int, tag: str) -> dict:
+def _followup_rascunho(tag: str) -> dict:
     return {
-        "assunto": f"[RASCUNHO] Re: {{{{RAZAO_SOCIAL}}}} — follow-up {numero}",
+        "assunto": "[RASCUNHO] Re: {{RAZAO_SOCIAL}}",
         "tag": tag,
-        "headline": f"[AJUSTAR] Título do follow-up {numero}",
-        "paragrafo1": f"[AJUSTAR] Texto do follow-up {numero} pra {{{{RAZAO_SOCIAL}}}} — este é só um rascunho, escreva o texto de verdade antes de ativar a tese.",
+        "headline": "[AJUSTAR] Título do follow-up (5 dias depois do inicial)",
+        "paragrafo1": (
+            "[AJUSTAR] Texto do follow-up pra {{RAZAO_SOCIAL}} — reforce o mesmo risco já mencionado no "
+            "e-mail inicial. Este é só um rascunho, escreva o texto de verdade antes de ativar a tese."
+        ),
         "paragrafo2": "[AJUSTAR] Segundo parágrafo, se precisar.",
         "checklist": list(_CHECKLIST_FOLLOWUP_PADRAO),
         "italico": "[AJUSTAR] Frase de urgência do follow-up.",
@@ -74,9 +79,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": "dívida pequena resolvida cedo raramente vira problema grande depois.",
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho(1, "CONSULTA PÚBLICA, PGFN"),
-        TIPOS_FOLLOWUP[1]: _followup_rascunho(2, "CONSULTA PÚBLICA, PGFN"),
-        TIPOS_FOLLOWUP[2]: _followup_rascunho(3, "CONSULTA PÚBLICA, PGFN"),
+        TIPOS_FOLLOWUP[0]: _followup_rascunho("CONSULTA PÚBLICA, PGFN"),
     },
     "simples_ibs_cbs": {
         TIPO_INICIAL: {
@@ -107,9 +110,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "perceberam essa mudança."
             ),
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho(1, "SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
-        TIPOS_FOLLOWUP[1]: _followup_rascunho(2, "SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
-        TIPOS_FOLLOWUP[2]: _followup_rascunho(3, "SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
+        TIPOS_FOLLOWUP[0]: _followup_rascunho("SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
     },
     "industria_ibs_cbs": {
         TIPO_INICIAL: {
@@ -141,9 +142,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "perceberam essa mudança."
             ),
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho(1, "SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
-        TIPOS_FOLLOWUP[1]: _followup_rascunho(2, "SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
-        TIPOS_FOLLOWUP[2]: _followup_rascunho(3, "SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
+        TIPOS_FOLLOWUP[0]: _followup_rascunho("SITUAÇÃO FISCAL, SIMPLES NACIONAL"),
     },
     "contadores_certificado": {
         TIPO_INICIAL: {
@@ -173,9 +172,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": _NOTAS_RODAPE_PADRAO,
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho(1, "EXCLUSIVO PARA ESCRITÓRIOS CONTÁBEIS"),
-        TIPOS_FOLLOWUP[1]: _followup_rascunho(2, "EXCLUSIVO PARA ESCRITÓRIOS CONTÁBEIS"),
-        TIPOS_FOLLOWUP[2]: _followup_rascunho(3, "EXCLUSIVO PARA ESCRITÓRIOS CONTÁBEIS"),
+        TIPOS_FOLLOWUP[0]: _followup_rascunho("EXCLUSIVO PARA ESCRITÓRIOS CONTÁBEIS"),
     },
     "contadores_tributaria": {
         TIPO_INICIAL: {
@@ -205,9 +202,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": _NOTAS_RODAPE_PADRAO,
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho(1, "PARCERIA EXCLUSIVA PARA ESCRITÓRIOS CONTÁBEIS"),
-        TIPOS_FOLLOWUP[1]: _followup_rascunho(2, "PARCERIA EXCLUSIVA PARA ESCRITÓRIOS CONTÁBEIS"),
-        TIPOS_FOLLOWUP[2]: _followup_rascunho(3, "PARCERIA EXCLUSIVA PARA ESCRITÓRIOS CONTÁBEIS"),
+        TIPOS_FOLLOWUP[0]: _followup_rascunho("PARCERIA EXCLUSIVA PARA ESCRITÓRIOS CONTÁBEIS"),
     },
     "mei_regularizacao": {
         TIPO_INICIAL: {
@@ -222,8 +217,6 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": _NOTAS_RODAPE_PADRAO,
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho(1, "REGULARIZAÇÃO MEI"),
-        TIPOS_FOLLOWUP[1]: _followup_rascunho(2, "REGULARIZAÇÃO MEI"),
-        TIPOS_FOLLOWUP[2]: _followup_rascunho(3, "REGULARIZAÇÃO MEI"),
+        TIPOS_FOLLOWUP[0]: _followup_rascunho("REGULARIZAÇÃO MEI"),
     },
 }

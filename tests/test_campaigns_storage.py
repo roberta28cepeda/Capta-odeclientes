@@ -139,7 +139,7 @@ def test_default_templates_are_seeded_for_every_known_tese():
     conn = _conn()
     templates = storage.list_templates(conn, tese=TESE)
 
-    assert {t.tipo for t in templates} == {"inicial", "followup_1", "followup_2", "followup_3"}
+    assert {t.tipo for t in templates} == {"inicial", "followup_1"}
     inicial = storage.get_template(conn, TESE, TIPO_INICIAL)
     assert inicial.tag == "CONSULTA PÚBLICA, PGFN"
     assert len(inicial.checklist) == 4
@@ -175,3 +175,49 @@ def test_set_template_for_new_tese_not_in_defaults():
     )
     assert storage.get_template(conn, "tese_nova", TIPO_INICIAL).assunto == "A"
     assert "tese_nova" in storage.list_template_teses(conn)
+
+
+def test_leads_sem_telefone_excludes_lead_with_telefone():
+    conn = _conn()
+    sem_telefone = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    com_telefone = storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y")
+    storage.set_lead_telefone(conn, com_telefone.id, "11912345678")
+
+    pendentes = storage.leads_sem_telefone(conn)
+
+    assert [lead.id for lead in pendentes] == [sem_telefone.id]
+
+
+def test_set_lead_telefone_updates_field():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+
+    storage.set_lead_telefone(conn, lead.id, "11912345678")
+
+    assert storage.get_lead(conn, lead.id).telefone == "11912345678"
+
+
+def test_leads_pendentes_whatsapp_only_includes_leads_with_telefone_not_contatados():
+    conn = _conn()
+    sem_telefone = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    com_telefone = storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y")
+    ja_contatado = storage.create_lead(conn, "33.444.555/0001-66", TESE, razao_social="Empresa Z")
+    storage.set_lead_telefone(conn, com_telefone.id, "11912345678")
+    storage.set_lead_telefone(conn, ja_contatado.id, "11955556666")
+    storage.set_lead_whatsapp_contatado(conn, ja_contatado.id)
+
+    pendentes = storage.leads_pendentes_whatsapp(conn)
+
+    assert [lead.id for lead in pendentes] == [com_telefone.id]
+
+
+def test_set_lead_whatsapp_contatado_removes_from_pendentes():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    storage.set_lead_telefone(conn, lead.id, "11912345678")
+    assert len(storage.leads_pendentes_whatsapp(conn)) == 1
+
+    storage.set_lead_whatsapp_contatado(conn, lead.id)
+
+    assert storage.leads_pendentes_whatsapp(conn) == []
+    assert storage.get_lead(conn, lead.id).whatsapp_contatado_em is not None

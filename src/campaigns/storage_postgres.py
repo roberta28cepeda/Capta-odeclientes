@@ -112,6 +112,12 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
             # Coluna da versão anterior (HTML bruto), substituída pelos campos estruturados acima.
             cur.execute("ALTER TABLE campanha_templates DROP COLUMN IF EXISTS corpo")
 
+            cur.execute("ALTER TABLE campanha_leads ADD COLUMN IF NOT EXISTS telefone TEXT")
+            cur.execute("ALTER TABLE campanha_leads ADD COLUMN IF NOT EXISTS whatsapp_contatado_em TEXT")
+            # Follow-up virou 1x (5 dias depois), não mais 3x (3 em 3 dias) —
+            # remove os templates dos follow-ups que deixaram de existir.
+            cur.execute("DELETE FROM campanha_templates WHERE tipo IN ('followup_2', 'followup_3')")
+
             for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
                 for tipo, campos in templates_do_tese.items():
                     cur.execute(
@@ -203,10 +209,52 @@ def set_lead_email(conn, lead_id: int, email: str) -> None:
     conn.commit()
 
 
+def leads_sem_telefone(conn, tese: str | None = None) -> list[Lead]:
+    with conn.cursor() as cur:
+        if tese is None:
+            cur.execute(
+                "SELECT * FROM campanha_leads WHERE status = 'ativo' AND (telefone IS NULL OR telefone = '') ORDER BY id"
+            )
+        else:
+            cur.execute(
+                "SELECT * FROM campanha_leads WHERE status = 'ativo' AND tese = %s AND (telefone IS NULL OR telefone = '') ORDER BY id",
+                (tese,),
+            )
+        rows = cur.fetchall()
+    return [_row_to_lead(row) for row in rows]
+
+
+def set_lead_telefone(conn, lead_id: int, telefone: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE campanha_leads SET telefone = %s WHERE id = %s", (telefone, lead_id))
+    conn.commit()
+
+
+def leads_pendentes_whatsapp(conn) -> list[Lead]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT * FROM campanha_leads
+            WHERE status = 'ativo' AND telefone IS NOT NULL AND telefone != '' AND whatsapp_contatado_em IS NULL
+            ORDER BY id
+            """
+        )
+        rows = cur.fetchall()
+    return [_row_to_lead(row) for row in rows]
+
+
+def set_lead_whatsapp_contatado(conn, lead_id: int) -> None:
+    contatado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute("UPDATE campanha_leads SET whatsapp_contatado_em = %s WHERE id = %s", (contatado_em, lead_id))
+    conn.commit()
+
+
 def _row_to_lead(row) -> Lead:
     return Lead(
         id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],
         status=row["status"], criado_em=row["criado_em"], valor_divida=row["valor_divida"],
+        telefone=row["telefone"], whatsapp_contatado_em=row["whatsapp_contatado_em"],
     )
 
 
