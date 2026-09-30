@@ -326,6 +326,28 @@ funciona hoje via CSV importado manualmente, ou no futuro via Serpro
 Integra Contador, ver abaixo). A pré-análise é só a porta de entrada da
 conversa, não substitui a checagem completa.
 
+**Etapas que hoje ficam manuais (fora do sistema)** — pesquisado e
+descartado automatizar por enquanto, pelos motivos abaixo. Quem for
+verificar isso precisa consultar manualmente:
+
+1. **Data de inscrição de cada débito na dívida ativa** — o produto
+   "Lista de Devedores" da InfoSimples só traz o número da inscrição e o
+   valor, sem a data. Não existe produto separado da InfoSimples pra
+   detalhar isso por número de inscrição (CDA).
+2. **Protesto em cartório** — a InfoSimples tem o produto
+   `ieptb/protestos`, mas ele exige criar uma conta própria em
+   `pesquisaprotesto.com.br` e logar com GOV.BR — não dá pra automatizar
+   com só o token da API, então ficou de fora por ora.
+3. **Dívida judicializada (execução fiscal)** — a API pública do CNJ
+   (DataJud) não permite buscar processos por CPF/CNPJ das partes (é
+   proposital, por LGPD — só busca por número de processo, classe,
+   assunto). O portal `jus.br` até tem essa busca, mas exige login
+   pessoal com conta GOV.BR nível ouro (2FA), o que não dá pra
+   automatizar com segurança. As alternativas reais são APIs pagas de
+   legal-tech (Judit.io, Escavador, ou o "Motor de Decisão" do Jusbrasil)
+   — nenhuma com preço público, todas exigindo contato comercial. Ainda
+   não contratado.
+
 ### O que este MVP não faz (ainda)
 
 A Veri e concorrentes puxam dado ao vivo do e-CAC via **Serpro Integra
