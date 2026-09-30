@@ -164,4 +164,28 @@ def test_cron_campanhas_runs_and_sends_pending_leads(app, monkeypatch, campaigns
     assert response.status_code == 200
     data = response.get_json()
     assert data["enviados"] == 1
+    assert data["busca_email"] is None
     mock_send.assert_called_once()
+
+
+def test_cron_campanhas_runs_email_search_when_exa_key_configured(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+    monkeypatch.setenv("EXA_API_KEY", "EXA_KEY")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.create_lead(conn, "11.222.333/0001-44", razao_social="Empresa X")
+
+    with patch("src.campaigns.engine.buscar_email_por_empresa", return_value="achado@empresax.com.br") as mock_busca, patch(
+        "src.campaigns.engine.send_email_html"
+    ) as mock_send:
+        response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["busca_email"] == {"leads_verificados": 1, "encontrados": 1, "erros": []}
+    mock_busca.assert_called_once_with("Empresa X", "EXA_KEY")
+    mock_send.assert_called_once()  # já achou o e-mail nessa mesma rodada, então já manda hoje

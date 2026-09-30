@@ -2,6 +2,7 @@ from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
 from src.campaigns import engine, storage
+from src.campaigns.email_finder import EmailFinderError
 from src.campaigns.models import TIPO_INICIAL
 
 
@@ -119,3 +120,42 @@ def test_enviar_relatorio_semanal_sends_email_with_report_body():
 
     mock_send.assert_called_once()
     assert mock_send.call_args[0][0] == "admin@exemplo.com"
+
+
+def test_buscar_emails_pendentes_sets_email_for_leads_without_one():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", razao_social="Empresa X")
+    storage.create_lead(conn, "22.333.444/0001-55", razao_social="Empresa Y", email="ja-tem@exemplo.com")
+
+    with patch("src.campaigns.engine.buscar_email_por_empresa", return_value="achado@empresax.com.br") as mock_busca:
+        resultado = engine.buscar_emails_pendentes(conn, "API_KEY")
+
+    mock_busca.assert_called_once_with("Empresa X", "API_KEY")
+    assert resultado == {"leads_verificados": 1, "encontrados": 1, "erros": []}
+    assert storage.get_lead(conn, lead.id).email == "achado@empresax.com.br"
+
+
+def test_buscar_emails_pendentes_records_error_without_stopping_others():
+    conn = _conn()
+    storage.create_lead(conn, "11.222.333/0001-44", razao_social="Empresa X")
+    storage.create_lead(conn, "22.333.444/0001-55", razao_social="Empresa Y")
+
+    with patch(
+        "src.campaigns.engine.buscar_email_por_empresa",
+        side_effect=[EmailFinderError("cota esgotada"), "achado@empresay.com.br"],
+    ):
+        resultado = engine.buscar_emails_pendentes(conn, "API_KEY")
+
+    assert resultado["leads_verificados"] == 2
+    assert resultado["encontrados"] == 1
+    assert len(resultado["erros"]) == 1
+
+
+def test_buscar_emails_pendentes_handles_no_email_found():
+    conn = _conn()
+    storage.create_lead(conn, "11.222.333/0001-44", razao_social="Empresa X")
+
+    with patch("src.campaigns.engine.buscar_email_por_empresa", return_value=None):
+        resultado = engine.buscar_emails_pendentes(conn, "API_KEY")
+
+    assert resultado == {"leads_verificados": 1, "encontrados": 0, "erros": []}

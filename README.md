@@ -459,7 +459,7 @@ python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.c
 - `/admin/campanhas/leads` — lista de leads e status de envio (admin).
 - `/admin/campanhas/leads/importar` — importa CSV (`cnpj,razao_social,email`) direto pelo navegador.
 - `/admin/campanhas/templates` — edita assunto/corpo/link de cada tipo de e-mail (inicial + 3 follow-ups). **Os textos padrão são só rascunho** (marcados `[AJUSTAR]`) — edite antes de rodar a campanha de verdade.
-- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): roda o envio do dia pra todo lead pendente, e às segundas-feiras também dispara o relatório semanal pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 9 * * *`, todo dia às 9h UTC).
+- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): se `EXA_API_KEY` estiver configurada, primeiro busca e-mail pros leads que ainda não têm; depois roda o envio do dia pra todo lead pendente; e às segundas-feiras também dispara o relatório semanal pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 9 * * *`, todo dia às 9h UTC) — tudo automático, sem precisar rodar nada pelo terminal em produção.
 
 ### O que não faz (por enquanto)
 

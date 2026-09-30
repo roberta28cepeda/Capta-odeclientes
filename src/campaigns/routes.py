@@ -178,7 +178,12 @@ def cron_rodar():
     base_url = os.environ.get("PUBLIC_BASE_URL") or request.host_url.rstrip("/")
 
     conn = _connect()
+
+    exa_api_key = os.environ.get("EXA_API_KEY")
+    busca_email = engine.buscar_emails_pendentes(conn, exa_api_key) if exa_api_key else None
+
     resultado = engine.rodar_diario(conn, base_url, smtp_host, int(smtp_port), smtp_username, smtp_password, smtp_from=smtp_from)
+    resultado["busca_email"] = busca_email
 
     relatorio_enviado = False
     if date.today().weekday() == 0:  # segunda-feira

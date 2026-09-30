@@ -9,8 +9,30 @@ from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 
 from src.campaigns import storage, tracking
+from src.campaigns.email_finder import EmailFinderError, buscar_email_por_empresa
 from src.campaigns.models import DIAS_ENTRE_FOLLOWUPS, Envio, Lead, STATUS_ATIVO, TIPO_INICIAL, TIPOS_ENVIO
 from src.fiscal_monitor.email_client import send_email, send_email_html
+
+
+def buscar_emails_pendentes(conn, api_key: str) -> dict:
+    """Busca o e-mail de cada lead ativo que ainda não tem um cadastrado —
+    roda automaticamente no cron diário, antes do envio, já que o usuário
+    não opera por CLI em produção. Erro num lead (site fora do ar, cota
+    esgotada etc.) não trava a busca dos demais.
+    """
+    leads = storage.leads_sem_email(conn)
+    encontrados = 0
+    erros = []
+    for lead in leads:
+        try:
+            email = buscar_email_por_empresa(lead.razao_social or lead.cnpj, api_key)
+        except EmailFinderError as exc:
+            erros.append({"lead_id": lead.id, "cnpj": lead.cnpj, "erro": str(exc)})
+            continue
+        if email:
+            storage.set_lead_email(conn, lead.id, email)
+            encontrados += 1
+    return {"leads_verificados": len(leads), "encontrados": encontrados, "erros": erros}
 
 
 def _proximo_tipo_envio(envios: list[Envio]) -> str | None:
