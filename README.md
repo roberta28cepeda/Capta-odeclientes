@@ -301,11 +301,30 @@ pra evitar abuso/consulta indevida por quem não tem acesso ao sistema).
 baixa o PDF na hora, com validação de dígito verificador do CNPJ antes de
 consultar.
 
-**O que isso não traz:** pendências, multas e dívidas fiscais são dado
-privado — exigem procuração eletrônica e acesso ao e-CAC (a parte do
-módulo que só funciona hoje via CSV importado manualmente, ou no futuro
-via Serpro Integra Contador, ver abaixo). A pré-análise é só a porta de
-entrada da conversa, não substitui a checagem completa.
+**Situação fiscal e dívida ativa (opcional, via InfoSimples):** com
+`INFOSIMPLES_API_TOKEN` configurada, a pré-análise passa a incluir mais
+duas seções, puxadas ao vivo direto da Receita Federal/PGFN:
+
+- **CND Federal** — se a empresa tem débito ativo na Receita Federal
+  e/ou na PGFN (Dívida Ativa da União), e o tipo de certidão (negativa,
+  positiva com efeitos de negativa, ou positiva).
+- **Lista de Devedores (PGFN)** — se o CNPJ está inscrito em dívida
+  ativa, com o valor total e o detalhamento por natureza do débito
+  (tributário, FGTS, etc.).
+
+Cada consulta tem custo por chamada (cobrado do saldo da conta
+InfoSimples — confira o preço atual em **API-CONSULTAS → Documentação**
+no painel deles). Sem a variável configurada, a pré-análise segue
+funcionando normal, só sem essas duas seções. Se a consulta falhar (sem
+saldo, fora do ar), a pré-análise não quebra — só entra um alerta no PDF
+avisando que essa parte não pôde ser verificada.
+
+**O que isso não traz:** mesmo com a InfoSimples configurada, multas,
+parcelamentos e o histórico completo de pendências continuam exigindo
+procuração eletrônica e acesso ao e-CAC (a parte do módulo que só
+funciona hoje via CSV importado manualmente, ou no futuro via Serpro
+Integra Contador, ver abaixo). A pré-análise é só a porta de entrada da
+conversa, não substitui a checagem completa.
 
 ### O que este MVP não faz (ainda)
 

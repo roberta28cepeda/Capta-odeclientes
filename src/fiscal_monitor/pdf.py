@@ -15,6 +15,7 @@ from src.common.pdf_styles import (
     TITLE_STYLE,
     new_document,
 )
+from src.fiscal_monitor.infosimples import DividaAtivaPgfn, SituacaoFiscalPgfn, formatar_valor_brl
 from src.fiscal_monitor.preanalise import PreAnalise
 from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
 
@@ -81,6 +82,8 @@ def render_pre_analise_pdf(
     output_path: str,
     escritorio_nome: str | None = None,
     logo_path: str | None = None,
+    situacao_fiscal: SituacaoFiscalPgfn | None = None,
+    divida_ativa: DividaAtivaPgfn | None = None,
 ) -> None:
     story = []
     if logo_path:
@@ -112,16 +115,46 @@ def render_pre_analise_pdf(
     if analise.socios:
         story.append(Paragraph(f"Sócios: {', '.join(analise.socios)}", BODY_STYLE))
 
+    if situacao_fiscal is not None:
+        story.append(Paragraph("Situação Fiscal (Receita Federal/PGFN)", HEADING_STYLE))
+        story.append(Paragraph(f"Certidão: {situacao_fiscal.tipo_certidao or '-'}", BODY_STYLE))
+        story.append(Paragraph(f"Débitos na Receita Federal: {_sim_nao(situacao_fiscal.debitos_rfb)}", BODY_STYLE))
+        story.append(Paragraph(f"Débitos na PGFN: {_sim_nao(situacao_fiscal.debitos_pgfn)}", BODY_STYLE))
+        if situacao_fiscal.validade_data:
+            story.append(Paragraph(f"Validade da certidão: {situacao_fiscal.validade_data}", BODY_STYLE))
+
+    if divida_ativa is not None:
+        story.append(Paragraph("Dívida Ativa da União (Lista de Devedores PGFN)", HEADING_STYLE))
+        story.append(Paragraph(f"Total da dívida: R$ {formatar_valor_brl(divida_ativa.total_divida)}", BODY_STYLE))
+        story.append(
+            Paragraph(
+                f"Tributário: R$ {formatar_valor_brl(divida_ativa.total_tributario)} · "
+                f"Não tributário: R$ {formatar_valor_brl(divida_ativa.total_nao_tributario)}",
+                BODY_STYLE,
+            )
+        )
+        for natureza in divida_ativa.naturezas:
+            story.append(Paragraph(f"• {natureza.descricao}: R$ {formatar_valor_brl(natureza.total)}", BULLET_STYLE))
+
     story.append(Paragraph("Alertas da pré-análise", ALERT_HEADING_STYLE))
     for alerta in alertas:
         story.append(Paragraph(f"• {alerta}", BULLET_STYLE))
 
     story.append(Spacer(1, 16))
+    nota_final = (
+        "Esta pré-análise usa apenas dados públicos (situação cadastral, enquadramento "
+        "tributário e, quando disponível, situação fiscal/dívida ativa na Receita Federal e "
+        "PGFN). Multas, parcelamentos e o histórico completo de pendências exigem procuração "
+        "eletrônica e acesso ao e-CAC para uma verificação completa."
+        if situacao_fiscal is not None or divida_ativa is not None
+        else
+        "Esta pré-análise usa apenas dados públicos (situação cadastral e "
+        "enquadramento tributário). Pendências, multas e débitos fiscais exigem "
+        "procuração eletrônica e acesso ao e-CAC para uma verificação completa."
+    )
     story.append(
         Paragraph(
-            "Esta pré-análise usa apenas dados públicos (situação cadastral e "
-            "enquadramento tributário). Pendências, multas e débitos fiscais exigem "
-            "procuração eletrônica e acesso ao e-CAC para uma verificação completa.",
+            nota_final,
             BODY_STYLE,
         )
     )

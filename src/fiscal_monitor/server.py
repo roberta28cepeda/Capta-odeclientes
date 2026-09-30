@@ -17,6 +17,14 @@ from flask import Flask, Response, after_this_request, jsonify, render_template_
 from src.common.webauth import admin_authenticated, cron_authorized, require_admin
 from src.fiscal_monitor import monitor, storage
 from src.fiscal_monitor.cron import check_all_tenants
+from src.fiscal_monitor.infosimples import (
+    ConsultaDebitosError,
+    consultar_cnd_federal,
+    consultar_lista_devedores,
+    gerar_alertas_fiscais,
+    montar_divida_ativa,
+    montar_situacao_fiscal,
+)
 from src.fiscal_monitor.pdf import render_pre_analise_pdf
 from src.fiscal_monitor.preanalise import (
     CartaoCnpjError,
@@ -367,9 +375,28 @@ def create_app(
 
         alertas = gerar_alertas(analise)
 
+        situacao_fiscal = None
+        divida_ativa = None
+        infosimples_token = os.environ.get("INFOSIMPLES_API_TOKEN")
+        if infosimples_token:
+            try:
+                situacao_fiscal = montar_situacao_fiscal(consultar_cnd_federal(cnpj, infosimples_token))
+                divida_ativa = montar_divida_ativa(consultar_lista_devedores(cnpj, infosimples_token))
+                alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa)
+            except ConsultaDebitosError as exc:
+                alertas.append(f"Não foi possível consultar situação fiscal/dívida ativa (PGFN): {exc}")
+
         fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
-        render_pre_analise_pdf(analise, alertas, pdf_path, escritorio_nome=escritorio_nome, logo_path=logo_path)
+        render_pre_analise_pdf(
+            analise,
+            alertas,
+            pdf_path,
+            escritorio_nome=escritorio_nome,
+            logo_path=logo_path,
+            situacao_fiscal=situacao_fiscal,
+            divida_ativa=divida_ativa,
+        )
 
         @after_this_request
         def _cleanup(response):

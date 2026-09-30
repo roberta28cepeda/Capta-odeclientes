@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from src.fiscal_monitor import storage
+from src.fiscal_monitor.infosimples import ConsultaDebitosError
 from src.fiscal_monitor.preanalise import CartaoCnpjError, ConsultaCnpjError
 from src.fiscal_monitor.server import create_app
 
@@ -375,6 +376,52 @@ def test_cartao_cnpj_returns_502_on_provider_error(app, monkeypatch):
         )
 
     assert response.status_code == 502
+
+
+def test_pre_analise_skips_infosimples_when_token_not_configured(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=SAMPLE_CNPJ_RESPONSE), patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal"
+    ) as mock_cnd:
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_cnd.assert_not_called()
+
+
+def test_pre_analise_includes_situacao_fiscal_when_infosimples_configured(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=SAMPLE_CNPJ_RESPONSE), patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal",
+        return_value={"debitos_pgfn": True, "debitos_rfb": False, "tipo": "Positiva"},
+    ) as mock_cnd, patch(
+        "src.fiscal_monitor.server.consultar_lista_devedores", return_value=None
+    ) as mock_devedores:
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_cnd.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+    mock_devedores.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+
+
+def test_pre_analise_still_generates_pdf_when_infosimples_falha(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=SAMPLE_CNPJ_RESPONSE), patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal",
+        side_effect=ConsultaDebitosError("saldo insuficiente"),
+    ):
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
 
 
 def test_cnpj_history_returns_404_for_cnpj_of_another_tenant(app, db_path):
