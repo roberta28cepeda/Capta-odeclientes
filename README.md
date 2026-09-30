@@ -431,17 +431,19 @@ segunda-feira com esses números da semana anterior.
 ### Setup
 
 Além do SMTP (mesmas variáveis do `fiscal_monitor`, ver acima), a busca
-de e-mail usa a **Brave Search API** — não a Google Custom Search JSON
-API: o Google fechou essa API pra contas novas em 2025 e vai descontinuar
-de vez em 2027 (o recurso "pesquisar toda a Web" nem existe mais pra
-mecanismo criado agora, só busca em até 50 domínios específicos, o que
-não serve pra buscar o site de empresa qualquer):
+de e-mail usa a **Exa Search API** — não Google nem Brave: o Google
+fechou a Custom Search API pra contas novas em 2025 (descontinua de vez
+em 2027), e a Brave eliminou o tier grátis sem cartão em fevereiro de
+2026 (passou a exigir cartão e cobrar por uso acima de ~1.000
+buscas/mês). A Exa continua sem pedir cartão:
 
-1. Crie uma conta em [api-dashboard.search.brave.com](https://api-dashboard.search.brave.com/),
-   assine o plano gratuito ("Free"), e gere uma API key → `BRAVE_SEARCH_API_KEY`.
-2. **2.000 buscas grátis por mês** (~65/dia) — cada CNPJ sem e-mail
-   cadastrado gasta 1 busca. Pra um volume de até ~65 leads novos/dia,
-   fica de graça; acima disso a Brave cobra por uso.
+1. Crie uma conta em [dashboard.exa.ai](https://dashboard.exa.ai/) e gere
+   uma API key → `EXA_API_KEY`. Não pede cartão de crédito.
+2. **$20 de bônus na criação da conta + $10/mês grátis recorrente**
+   (a $7 a cada 1.000 buscas, isso dá ~1.400 buscas/mês de graça) — cada
+   CNPJ sem e-mail cadastrado gasta 1 busca. Sem cartão cadastrado, se o
+   crédito do mês acabar a busca simplesmente para de funcionar até o mês
+   seguinte renovar (nunca gera cobrança sem cartão).
 
 ### Uso (CLI, local)
 
@@ -487,4 +489,4 @@ python -m src.campaigns.cli --relatorio-semanal --destinatario contato@leactis.c
 | Monitoramento Fiscal — pré-análise pública (só CNPJ, sem procuração) | Fácil | ✅ MVP implementado |
 | Monitoramento Fiscal (estilo Veri) — via CSV, com CND/parcelamento/sublimite Simples | Médio | ✅ MVP implementado |
 | Monitoramento Fiscal — integração real via Serpro Integra Contador (canal oficial Receita Federal) | Difícil (contrato Serpro + certificado digital) | ⏳ Terreno preparado (`SerproIntegraContadorProvider`), não ativado — ver seção acima |
-| Campanha de prospecção PGFN — envio + follow-up + rastreio + relatório semanal | Médio (depende da Brave Search API pra achar e-mail) | ✅ MVP implementado — textos de e-mail ainda são rascunho, ver seção acima |
+| Campanha de prospecção PGFN — envio + follow-up + rastreio + relatório semanal | Médio (depende da Exa Search API pra achar e-mail) | ✅ MVP implementado — textos de e-mail ainda são rascunho, ver seção acima |

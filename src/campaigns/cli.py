@@ -62,9 +62,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.buscar_emails:
-        api_key = os.environ.get("BRAVE_SEARCH_API_KEY")
+        api_key = os.environ.get("EXA_API_KEY")
         if not api_key:
-            print("Defina BRAVE_SEARCH_API_KEY no .env para --buscar-emails.", file=sys.stderr)
+            print("Defina EXA_API_KEY no .env para --buscar-emails.", file=sys.stderr)
             return 1
         leads = storage.leads_sem_email(conn)
         encontrados = 0

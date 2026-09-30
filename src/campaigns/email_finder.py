@@ -1,13 +1,12 @@
 """Acha o e-mail de contato de uma empresa a partir do nome/razão social,
-via Brave Search API (2.000 buscas grátis/mês no plano gratuito — cobre um
-volume de até ~65 leads novos/dia, ver README) + leitura da página
-resultante procurando um e-mail.
+via Exa Search API (bônus de $20 na criação da conta + $10/mês grátis
+recorrente, sem cartão de crédito — ver README) + leitura do conteúdo da
+página resultante procurando um e-mail.
 
-Usa a Brave Search API (não a Google Custom Search JSON API) porque o
-Google fechou essa API pra novas contas em 2025 e vai descontinuar de vez
-em 2027 — "pesquisar toda a Web" nem existe mais pra mecanismo criado
-agora, só busca em domínios específicos, o que não serve pra buscar o
-site de qualquer empresa.
+Já usou Google Custom Search e depois Brave Search — ambos fecharam o
+tier gratuito sem cartão pra conta nova em 2025/2026. A Exa continua sem
+exigir cartão: se o crédito mensal acabar, a busca só para de funcionar
+até o mês renovar, nunca gera cobrança sem cartão cadastrado.
 
 Não é 100% confiável (nem toda empresa tem e-mail público, nem toda busca
 acha o site certo) — é uma tentativa best-effort, igual o enriquecimento
@@ -20,7 +19,7 @@ import re
 
 import requests
 
-SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+SEARCH_URL = "https://api.exa.ai/search"
 
 # E-mails genéricos de institucional/spam/exemplo que não valem como contato.
 _DOMINIOS_IGNORADOS = {"sentry.io", "wixpress.com", "example.com", "godaddy.com", "schema.org"}
@@ -29,7 +28,7 @@ _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
 class EmailFinderError(RuntimeError):
-    """Erro ao consultar a Brave Search API (chave inválida, cota excedida etc.)."""
+    """Erro ao consultar a Exa Search API (chave inválida, crédito esgotado etc.)."""
 
 
 def _extrair_email(texto: str) -> str | None:
@@ -43,32 +42,33 @@ def _extrair_email(texto: str) -> str | None:
 def buscar_email_por_empresa(
     razao_social: str, api_key: str, session: requests.Session | None = None
 ) -> str | None:
-    """Busca o site da empresa via Brave Search e tenta extrair um e-mail dele.
+    """Busca o site da empresa via Exa e tenta extrair um e-mail dele.
 
     Retorna None (sem erro) se não achar nenhum resultado ou nenhum e-mail
-    na página — CNPJ sem e-mail público não deve travar o resto do lote.
+    — CNPJ sem e-mail público não deve travar o resto do lote.
     """
     session = session or requests.Session()
 
     try:
-        response = session.get(
+        response = session.post(
             SEARCH_URL,
-            params={"q": f"{razao_social} contato e-mail", "count": 3},
-            headers={"Accept": "application/json", "X-Subscription-Token": api_key},
+            json={"query": f"{razao_social} contato e-mail", "numResults": 3, "contents": {"text": True}},
+            headers={"accept": "application/json", "content-type": "application/json", "x-api-key": api_key},
             timeout=10,
         )
     except requests.exceptions.RequestException as exc:
-        raise EmailFinderError(f"Falha ao consultar a Brave Search API: {exc}") from exc
+        raise EmailFinderError(f"Falha ao consultar a Exa Search API: {exc}") from exc
 
+    if response.status_code == 401:
+        raise EmailFinderError("Chave da Exa Search API inválida.")
     if response.status_code == 429:
-        raise EmailFinderError("Cota mensal da Brave Search API excedida (2.000 buscas grátis/mês).")
+        raise EmailFinderError("Crédito mensal da Exa Search API esgotado (renova no próximo mês).")
     if response.status_code != 200:
-        raise EmailFinderError(f"Brave Search API retornou {response.status_code}: {response.text[:200]}")
+        raise EmailFinderError(f"Exa Search API retornou {response.status_code}: {response.text[:200]}")
 
     payload = response.json()
-    resultados = payload.get("web", {}).get("results", [])
-    for item in resultados:
-        snippet = f"{item.get('title', '')} {item.get('description', '')}"
+    for item in payload.get("results", []):
+        snippet = f"{item.get('title', '')} {item.get('text', '')}"
         email = _extrair_email(snippet)
         if email:
             return email
