@@ -268,12 +268,23 @@ uso interno.
 
 Resolve a dor de abordar um cliente que ainda não quer dar procuração ou
 acesso ao e-CAC: com **só o CNPJ**, consulta dados que já são públicos —
-situação cadastral, natureza jurídica, porte, e se a empresa é optante
-pelo **Simples Nacional** ou **MEI** — via [BrasilAPI](https://brasilapi.com.br/),
-um espelho gratuito e sem autenticação dos dados que a Receita Federal já
-publica. Gera um PDF pronto pra levar na reunião, **antes** de pedir
-qualquer acesso. Ao contrário do resto do módulo, isso funciona **hoje**,
-sem depender de certificado digital nem de contrato com ninguém.
+situação cadastral, natureza jurídica, porte, QSA (sócios) e se a empresa
+é optante pelo **Simples Nacional** ou **MEI**. Gera um PDF pronto pra
+levar na reunião, **antes** de pedir qualquer acesso. Ao contrário do
+resto do módulo, isso funciona **hoje**, sem depender de certificado
+digital nem de contrato com ninguém.
+
+Duas fontes de dado cadastral, escolhidas automaticamente:
+
+- **Sem `CNPJA_API_TOKEN` configurada** (padrão): usa
+  [BrasilAPI](https://brasilapi.com.br/), espelho gratuito e sem
+  autenticação dos dados que a Receita Federal já publica.
+- **Com `CNPJA_API_TOKEN` configurada**: usa a
+  [CNPJá](https://cnpja.com/) (paga), que traz QSA mais completo e libera
+  um segundo botão no formulário — **baixar o Cartão CNPJ oficial**, o
+  PDF de verdade (Comprovante de Inscrição e de Situação Cadastral)
+  emitido em tempo real pela própria Receita Federal, sem precisar entrar
+  no site do governo.
 
 ```bash
 python -m src.fiscal_monitor.cli --pre-analise --cnpj 11.222.333/0001-44 \

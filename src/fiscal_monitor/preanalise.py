@@ -3,14 +3,19 @@
 Resolve uma dor real de prospecção: o cliente não quer dar procuração ou
 acesso ao e-CAC antes de fechar contrato. Com só o CNPJ, dá pra puxar o
 que já é **público** — situação cadastral, enquadramento no Simples
-Nacional/MEI, natureza jurídica — via BrasilAPI, um espelho gratuito e
-sem autenticação dos dados que a própria Receita Federal já publica. Gera
-um PDF com esse diagnóstico inicial pra usar na reunião de venda, antes de
-pedir qualquer acesso.
+Nacional/MEI, natureza jurídica, QSA — usando a CNPJá (fonte paga, mais
+completa, exige `CNPJA_API_TOKEN`) quando configurada, com fallback pra
+BrasilAPI (espelho gratuito e sem autenticação da Receita Federal) quando
+não. Gera um PDF com esse diagnóstico inicial pra usar na reunião de
+venda, antes de pedir qualquer acesso.
 
-O que isso **não** traz: pendências, multas e dívidas privadas exigem
-procuração eletrônica + e-CAC (ver `providers.py`) — não são dado
-público. A pré-análise é só a "porta de entrada".
+A CNPJá também permite baixar o Cartão CNPJ oficial (o PDF que a própria
+Receita Federal emite) — ver `buscar_cartao_cnpj_pdf`.
+
+O que isso **não** traz: pendências, multas e dívidas exigem CND/consulta
+à PGFN (ver integração InfoSimples, pendente) ou procuração eletrônica +
+e-CAC (ver `providers.py`) — não são dado cadastral. A pré-análise é só a
+"porta de entrada".
 """
 
 from __future__ import annotations
@@ -20,10 +25,16 @@ from dataclasses import dataclass, field
 import requests
 
 BRASILAPI_URL = "https://brasilapi.com.br/api/cnpj/v1/{cnpj}"
+CNPJA_OFFICE_URL = "https://api.cnpja.com/office/{cnpj}"
+CNPJA_CERTIFICATE_URL = "https://api.cnpja.com/rfb/certificate"
 
 
 class ConsultaCnpjError(RuntimeError):
-    """Erro ao consultar o CNPJ na BrasilAPI (CNPJ inválido, não encontrado, API fora do ar)."""
+    """Erro ao consultar o CNPJ (BrasilAPI ou CNPJá): CNPJ inválido, não encontrado, API fora do ar."""
+
+
+class CartaoCnpjError(RuntimeError):
+    """Erro ao buscar o Cartão CNPJ oficial (PDF) na CNPJá."""
 
 
 @dataclass
@@ -82,6 +93,83 @@ def consultar_cnpj_publico(cnpj: str, session: requests.Session | None = None) -
     if response.status_code >= 400:
         raise ConsultaCnpjError(f"Erro ao consultar CNPJ {cnpj}: HTTP {response.status_code}")
     return response.json()
+
+
+def consultar_cnpj_cnpja(cnpj: str, token: str, session: requests.Session | None = None) -> dict:
+    """Consulta cadastral completa (incl. QSA) na CNPJá — fonte paga, mais
+    completa que a BrasilAPI (usada quando `CNPJA_API_TOKEN` está configurado).
+    """
+    session = session or requests.Session()
+    url = CNPJA_OFFICE_URL.format(cnpj=only_digits(cnpj))
+    try:
+        response = session.get(url, headers={"Authorization": token}, timeout=15)
+    except requests.exceptions.RequestException as exc:
+        raise ConsultaCnpjError(f"Falha de conexão ao consultar CNPJ {cnpj} na CNPJá: {exc}") from exc
+    if response.status_code == 404:
+        raise ConsultaCnpjError(f"CNPJ {cnpj} não encontrado na CNPJá.")
+    if response.status_code >= 400:
+        raise ConsultaCnpjError(
+            f"Erro ao consultar CNPJ {cnpj} na CNPJá: HTTP {response.status_code} — {response.text[:300]}"
+        )
+    return response.json()
+
+
+def buscar_cartao_cnpj_pdf(cnpj: str, token: str, session: requests.Session | None = None) -> bytes:
+    """Busca o PDF oficial do Cartão CNPJ (Comprovante de Inscrição e de
+    Situação Cadastral), emitido em tempo real pela Receita Federal, via CNPJá.
+    """
+    session = session or requests.Session()
+    try:
+        response = session.get(
+            CNPJA_CERTIFICATE_URL,
+            headers={"Authorization": token, "Accept": "application/pdf"},
+            params={"taxId": only_digits(cnpj)},
+            timeout=30,
+        )
+    except requests.exceptions.RequestException as exc:
+        raise CartaoCnpjError(f"Falha de conexão ao buscar Cartão CNPJ de {cnpj}: {exc}") from exc
+    if response.status_code >= 400 or "pdf" not in response.headers.get("Content-Type", "").lower():
+        raise CartaoCnpjError(
+            f"Não foi possível obter o Cartão CNPJ oficial de {cnpj} (HTTP {response.status_code}): "
+            f"{response.text[:300]}"
+        )
+    return response.content
+
+
+def montar_pre_analise_cnpja(dados: dict) -> PreAnalise:
+    """Mapeia a resposta de `consultar_cnpj_cnpja` pro mesmo formato usado
+    pelo PDF de pré-análise (`PreAnalise`).
+    """
+    company = dados.get("company") or {}
+    address = dados.get("address") or {}
+    status = dados.get("status") or {}
+    nature = company.get("nature") or {}
+    size = company.get("size") or {}
+    simples = company.get("simples") or {}
+    simei = company.get("simei") or {}
+    main_activity = dados.get("mainActivity") or {}
+    socios = [
+        membro.get("person", {}).get("name", "")
+        for membro in company.get("members", [])
+        if membro.get("person", {}).get("name")
+    ]
+    return PreAnalise(
+        cnpj=dados.get("taxId", ""),
+        razao_social=company.get("name", ""),
+        nome_fantasia=dados.get("alias") or None,
+        situacao_cadastral=status.get("text"),
+        data_situacao_cadastral=dados.get("statusDate"),
+        natureza_juridica=nature.get("text"),
+        cnae_principal=main_activity.get("text"),
+        porte=size.get("text"),
+        uf=address.get("state"),
+        municipio=address.get("city"),
+        data_inicio_atividade=dados.get("founded"),
+        opcao_pelo_simples=simples.get("optant"),
+        opcao_pelo_mei=simei.get("optant"),
+        capital_social=company.get("equity"),
+        socios=socios,
+    )
 
 
 def montar_pre_analise(dados: dict) -> PreAnalise:

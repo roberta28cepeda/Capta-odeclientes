@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from src.fiscal_monitor import storage
-from src.fiscal_monitor.preanalise import ConsultaCnpjError
+from src.fiscal_monitor.preanalise import CartaoCnpjError, ConsultaCnpjError
 from src.fiscal_monitor.server import create_app
 
 SAMPLE_CNPJ_RESPONSE = {
@@ -291,6 +291,90 @@ def test_pre_analise_post_shows_error_when_consulta_falha(app, monkeypatch):
 
     assert response.status_code == 400
     assert "não encontrado".encode() in response.data
+
+
+def test_pre_analise_form_shows_cartao_cnpj_button_when_cnpja_configured(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("CNPJA_API_TOKEN", "TOKEN123")
+    response = app.test_client().get("/pre-analise", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert b"Cart\xc3\xa3o CNPJ" in response.data
+
+
+def test_pre_analise_form_hides_cartao_cnpj_button_without_cnpja_token(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/pre-analise", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert b"Cart\xc3\xa3o CNPJ" not in response.data
+
+
+def test_pre_analise_post_uses_cnpja_when_token_configured(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("CNPJA_API_TOKEN", "TOKEN123")
+    cnpja_response = {
+        "taxId": "33000167000101",
+        "company": {"name": "PETROBRAS", "nature": {}, "size": {}, "simples": {}, "simei": {}, "members": []},
+        "status": {"text": "Ativa"},
+        "address": {"state": "RJ", "city": "RIO DE JANEIRO"},
+        "mainActivity": {},
+    }
+    with patch("src.fiscal_monitor.server.consultar_cnpj_cnpja", return_value=cnpja_response) as mock_cnpja, patch(
+        "src.fiscal_monitor.server.consultar_cnpj_publico"
+    ) as mock_brasilapi:
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_cnpja.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+    mock_brasilapi.assert_not_called()
+
+
+def test_cartao_cnpj_requires_admin_auth(app):
+    response = app.test_client().get("/pre-analise/cartao-cnpj?cnpj=33.000.167/0001-01")
+    assert response.status_code == 401
+
+
+def test_cartao_cnpj_returns_500_without_token(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get(
+        "/pre-analise/cartao-cnpj?cnpj=33.000.167/0001-01", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 500
+
+
+def test_cartao_cnpj_rejects_invalid_cnpj(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("CNPJA_API_TOKEN", "TOKEN123")
+    response = app.test_client().get(
+        "/pre-analise/cartao-cnpj?cnpj=00.000.000/0000-00", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 400
+
+
+def test_cartao_cnpj_returns_pdf_on_success(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("CNPJA_API_TOKEN", "TOKEN123")
+    with patch("src.fiscal_monitor.server.buscar_cartao_cnpj_pdf", return_value=b"%PDF-1.4 conteudo") as mock_busca:
+        response = app.test_client().get(
+            "/pre-analise/cartao-cnpj?cnpj=33.000.167/0001-01", headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    mock_busca.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+
+
+def test_cartao_cnpj_returns_502_on_provider_error(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("CNPJA_API_TOKEN", "TOKEN123")
+    with patch(
+        "src.fiscal_monitor.server.buscar_cartao_cnpj_pdf",
+        side_effect=CartaoCnpjError("cota esgotada"),
+    ):
+        response = app.test_client().get(
+            "/pre-analise/cartao-cnpj?cnpj=33.000.167/0001-01", headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 502
 
 
 def test_cnpj_history_returns_404_for_cnpj_of_another_tenant(app, db_path):

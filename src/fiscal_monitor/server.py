@@ -19,10 +19,14 @@ from src.fiscal_monitor import monitor, storage
 from src.fiscal_monitor.cron import check_all_tenants
 from src.fiscal_monitor.pdf import render_pre_analise_pdf
 from src.fiscal_monitor.preanalise import (
+    CartaoCnpjError,
     ConsultaCnpjError,
+    buscar_cartao_cnpj_pdf,
+    consultar_cnpj_cnpja,
     consultar_cnpj_publico,
     gerar_alertas,
     montar_pre_analise,
+    montar_pre_analise_cnpja,
     only_digits,
     validar_cnpj,
 )
@@ -158,6 +162,13 @@ _PRE_ANALISE_FORM_TEMPLATE = """
   <p><label>Logo (opcional)<br><input type="file" name="logo" accept="image/*"></label></p>
   <button type="submit">Gerar pré-análise (PDF)</button>
 </form>
+{% if cnpja_disponivel %}
+<form method="get" action="/pre-analise/cartao-cnpj" style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #ccc">
+  <p><label>Baixar Cartão CNPJ oficial (PDF direto da Receita Federal, via CNPJá)<br>
+     <input type="text" name="cnpj" required placeholder="00.000.000/0000-00"></label></p>
+  <button type="submit">Baixar Cartão CNPJ</button>
+</form>
+{% endif %}
 <p style="margin-top:2rem;font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 """
 
@@ -178,11 +189,14 @@ _PRIVACIDADE_TEMPLATE = """
 <h2>2. Quais dados coletamos, e de onde</h2>
 <p><strong>Pré-análise</strong> (página <code>/pre-analise</code>, restrita a
 login de administrador): o CNPJ informado é consultado em tempo real na
-<a href="https://brasilapi.com.br" target="_blank" rel="noopener">BrasilAPI</a>,
-um serviço de terceiros que espelha dados públicos da Receita Federal
-(situação cadastral, natureza jurídica, enquadramento no Simples
-Nacional/MEI). Essa consulta <strong>não é armazenada</strong> em nosso
-banco de dados — o PDF é gerado na hora e a busca não fica salva.</p>
+<a href="https://brasilapi.com.br" target="_blank" rel="noopener">BrasilAPI</a>
+ou na <a href="https://cnpja.com" target="_blank" rel="noopener">CNPJá</a>
+(conforme a configuração), serviços de terceiros que espelham dados
+públicos da Receita Federal (situação cadastral, natureza jurídica,
+enquadramento no Simples Nacional/MEI, quadro de sócios) e, quando
+solicitado, o Cartão CNPJ oficial emitido pela própria Receita Federal.
+Essa consulta <strong>não é armazenada</strong> em nosso banco de dados —
+o PDF é gerado na hora e a busca não fica salva.</p>
 <p><strong>Carteira de clientes do escritório contábil</strong> (área
 autenticada): CNPJ, razão social, regime tributário, contato de WhatsApp
 do escritório, e os achados fiscais (pendências, multas, DAS, CNDs,
@@ -191,7 +205,7 @@ ficam armazenados em nosso banco enquanto o escritório for cliente.</p>
 
 <h2>3. Com quem compartilhamos</h2>
 <ul>
-  <li><strong>BrasilAPI</strong> — recebe o CNPJ digitado na pré-análise, pra devolver o dado cadastral público correspondente.</li>
+  <li><strong>BrasilAPI / CNPJá</strong> — recebem o CNPJ digitado na pré-análise, pra devolver o dado cadastral público correspondente (e, na CNPJá, o Cartão CNPJ oficial quando solicitado).</li>
   <li><strong>Meta (WhatsApp Cloud API)</strong> — usada só se o escritório optar por receber alertas fiscais por WhatsApp; recebe o número de contato cadastrado e o texto do alerta.</li>
 </ul>
 <p>Não vendemos nem compartilhamos dados com terceiros para fins de publicidade.</p>
@@ -303,8 +317,10 @@ def create_app(
         if unauthorized:
             return unauthorized
 
+        cnpja_token = os.environ.get("CNPJA_API_TOKEN")
+
         if request.method == "GET":
-            return render_template_string(_PRE_ANALISE_FORM_TEMPLATE)
+            return render_template_string(_PRE_ANALISE_FORM_TEMPLATE, cnpja_disponivel=bool(cnpja_token))
 
         cnpj = (request.form.get("cnpj") or "").strip()
         escritorio_nome = (request.form.get("escritorio_nome") or "").strip() or None
@@ -316,6 +332,7 @@ def create_app(
                     erro="CNPJ inválido — confira os dígitos.",
                     cnpj=cnpj,
                     escritorio_nome=escritorio_nome,
+                    cnpja_disponivel=bool(cnpja_token),
                 ),
                 400,
             )
@@ -328,18 +345,26 @@ def create_app(
             logo_file.save(logo_path)
 
         try:
-            dados = consultar_cnpj_publico(cnpj)
+            if cnpja_token:
+                dados = consultar_cnpj_cnpja(cnpj, cnpja_token)
+                analise = montar_pre_analise_cnpja(dados)
+            else:
+                dados = consultar_cnpj_publico(cnpj)
+                analise = montar_pre_analise(dados)
         except ConsultaCnpjError as exc:
             if logo_path and os.path.exists(logo_path):
                 os.remove(logo_path)
             return (
                 render_template_string(
-                    _PRE_ANALISE_FORM_TEMPLATE, erro=str(exc), cnpj=cnpj, escritorio_nome=escritorio_nome
+                    _PRE_ANALISE_FORM_TEMPLATE,
+                    erro=str(exc),
+                    cnpj=cnpj,
+                    escritorio_nome=escritorio_nome,
+                    cnpja_disponivel=bool(cnpja_token),
                 ),
                 400,
             )
 
-        analise = montar_pre_analise(dados)
         alertas = gerar_alertas(analise)
 
         fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
@@ -355,6 +380,31 @@ def create_app(
 
         return send_file(
             pdf_path, as_attachment=True, download_name=f"pre_analise_{only_digits(cnpj)}.pdf", mimetype="application/pdf"
+        )
+
+    @app.get("/pre-analise/cartao-cnpj")
+    def cartao_cnpj():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+
+        cnpja_token = os.environ.get("CNPJA_API_TOKEN")
+        if not cnpja_token:
+            return jsonify({"error": "CNPJA_API_TOKEN não configurado — Cartão CNPJ oficial indisponível."}), 500
+
+        cnpj = (request.args.get("cnpj") or "").strip()
+        if not validar_cnpj(cnpj):
+            return jsonify({"error": "CNPJ inválido — confira os dígitos."}), 400
+
+        try:
+            pdf_bytes = buscar_cartao_cnpj_pdf(cnpj, cnpja_token)
+        except CartaoCnpjError as exc:
+            return jsonify({"error": str(exc)}), 502
+
+        return Response(
+            pdf_bytes,
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=cartao_cnpj_{only_digits(cnpj)}.pdf"},
         )
 
     @app.get("/tenants")
