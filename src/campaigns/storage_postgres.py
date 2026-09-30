@@ -109,6 +109,8 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
             cur.execute("DELETE FROM campanha_templates WHERE tese = ''")
             cur.execute("ALTER TABLE campanha_templates DROP CONSTRAINT IF EXISTS campanha_templates_pkey")
             cur.execute("ALTER TABLE campanha_templates ADD PRIMARY KEY (tese, tipo)")
+            # Coluna da versão anterior (HTML bruto), substituída pelos campos estruturados acima.
+            cur.execute("ALTER TABLE campanha_templates DROP COLUMN IF EXISTS corpo")
 
             for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
                 for tipo, campos in templates_do_tese.items():
