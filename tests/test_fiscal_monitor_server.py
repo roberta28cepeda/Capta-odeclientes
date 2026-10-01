@@ -47,6 +47,7 @@ def app(db_path):
     application = create_app(db_path=db_path)
     application.config["_tenant_id"] = tenant.id
     application.config["_tenant_token"] = tenant.acesso_token
+    application.config["_cnpj_id"] = cnpj.id
     return application
 
 
@@ -591,3 +592,141 @@ def test_alternar_ativo_usuario_toggles_status(app, monkeypatch, db_path):
     assert response.status_code == 200
     conn = storage.connect(db_path)
     assert storage.get_admin_user_by_username(conn, "maria").ativo is False
+
+
+def _cnpj_url(app, path: str = "") -> str:
+    tenant_id = app.config["_tenant_id"]
+    cnpj_id = app.config["_cnpj_id"]
+    token = app.config["_tenant_token"]
+    return f"/tenants/{tenant_id}/cnpjs/{cnpj_id}{path}?token={token}"
+
+
+def test_tenant_detail_shows_risk_score(app):
+    response = app.test_client().get(_tenant_url(app))
+    assert response.status_code == 200
+    assert b"Baixo" in response.data  # sem obrigação/certidão cadastrada, risco baixo
+
+
+def test_obrigacoes_requires_tenant_auth(app):
+    tenant_id = app.config["_tenant_id"]
+    cnpj_id = app.config["_cnpj_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/obrigacoes")
+    assert response.status_code == 403
+
+
+def test_obrigacoes_post_creates_and_lists(app):
+    response = app.test_client().post(
+        _cnpj_url(app, "/obrigacoes"), data={"tipo": "DAS", "vencimento": "2026-10-20"}
+    )
+    assert response.status_code == 200
+    assert b"DAS" in response.data
+    assert b"2026-10-20" in response.data
+
+
+def test_marcar_obrigacao_entregue_route_updates_status(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    obrigacao = storage.create_obrigacao(conn, cnpj_id, "DAS", "2026-10-20")
+    conn.close()
+
+    response = app.test_client().post(_cnpj_url(app, f"/obrigacoes/{obrigacao.id}/entregue"))
+
+    assert response.status_code == 302
+    conn = storage.connect(db_path)
+    assert storage.get_obrigacao(conn, obrigacao.id).status == "entregue"
+
+
+def test_certidoes_requires_tenant_auth(app):
+    tenant_id = app.config["_tenant_id"]
+    cnpj_id = app.config["_cnpj_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/certidoes")
+    assert response.status_code == 403
+
+
+def test_certidoes_lists_federal_as_required_without_uf(app):
+    response = app.test_client().get(_cnpj_url(app, "/certidoes"))
+    assert response.status_code == 200
+    assert b"FEDERAL" in response.data
+    assert b"sem certid" in response.data
+
+
+def test_certidoes_post_uploads_pdf(app, db_path):
+    response = app.test_client().post(
+        _cnpj_url(app, "/certidoes"),
+        data={
+            "orgao": "federal", "numero": "123ABC", "emitida_em": "2026-09-01", "valida_ate": "2027-03-01",
+            "arquivo": (io.BytesIO(b"%PDF-1.4 conteudo"), "certidao.pdf"),
+        },
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert b"valida" in response.data
+
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    atuais = storage.latest_certidoes_by_orgao(conn, cnpj_id)
+    assert atuais["federal"].numero == "123ABC"
+
+
+def test_baixar_certidao_returns_pdf(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    certidao = storage.create_certidao(
+        conn, cnpj_id, "federal", None, "2026-09-01", "2027-03-01", "certidao.pdf", b"%PDF-1.4 conteudo"
+    )
+    conn.close()
+
+    response = app.test_client().get(_cnpj_url(app, f"/certidoes/{certidao.id}/baixar"))
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    assert response.data == b"%PDF-1.4 conteudo"
+
+
+def _pdf_valido_minimo() -> bytes:
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer)
+    c.drawString(10, 10, "certidao de teste")
+    c.save()
+    return buffer.getvalue()
+
+
+def test_baixar_certidoes_unificado_merges_pdfs(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    storage.create_certidao(
+        conn, cnpj_id, "federal", None, "2026-09-01", "2027-03-01", "federal.pdf", _pdf_valido_minimo()
+    )
+    conn.close()
+
+    response = app.test_client().get(_cnpj_url(app, "/certidoes/unificado.pdf"))
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+
+
+def test_baixar_certidoes_unificado_404_without_certidoes(app):
+    response = app.test_client().get(_cnpj_url(app, "/certidoes/unificado.pdf"))
+    assert response.status_code == 404
+
+
+def test_reforma_tributaria_requires_admin(app):
+    response = app.test_client().get("/reforma-tributaria")
+    assert response.status_code == 401
+
+
+def test_reforma_tributaria_renders_form_without_faturamento(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/reforma-tributaria", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert response.status_code == 200
+
+
+def test_reforma_tributaria_simulates_with_faturamento(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get(
+        "/reforma-tributaria?faturamento=1000000", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+    assert "Híbrido".encode() in response.data

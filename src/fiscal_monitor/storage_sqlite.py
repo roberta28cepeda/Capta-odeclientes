@@ -10,7 +10,7 @@ import secrets
 import sqlite3
 from datetime import datetime, timezone
 
-from src.fiscal_monitor.models import AdminUser, Cnpj, Finding, Tenant
+from src.fiscal_monitor.models import AdminUser, Certidao, Cnpj, Finding, Obrigacao, Tenant
 
 DEFAULT_DB_PATH = "output/fiscal_monitor.db"
 
@@ -63,6 +63,26 @@ CREATE TABLE IF NOT EXISTS findings (
     status TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS obrigacoes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    tipo TEXT NOT NULL,
+    vencimento TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pendente'
+);
+
+CREATE TABLE IF NOT EXISTS certidoes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    orgao TEXT NOT NULL,
+    numero TEXT,
+    emitida_em TEXT NOT NULL,
+    valida_ate TEXT NOT NULL,
+    arquivo_nome TEXT NOT NULL,
+    arquivo_conteudo BLOB NOT NULL,
+    criado_em TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS admin_users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
@@ -107,6 +127,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     try:
         conn.execute("ALTER TABLE tenants ADD COLUMN contato_email TEXT")
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass  # coluna já existe
+
+    try:
+        conn.execute("ALTER TABLE cnpjs ADD COLUMN uf TEXT")
         conn.commit()
     except sqlite3.OperationalError:
         pass  # coluna já existe
@@ -177,17 +203,19 @@ def upsert_cnpj(
     razao_social: str | None = None,
     nome_fantasia: str | None = None,
     regime_tributario: str | None = None,
+    uf: str | None = None,
 ) -> Cnpj:
     conn.execute(
         """
-        INSERT INTO cnpjs (tenant_id, cnpj, razao_social, nome_fantasia, ativo, regime_tributario)
-        VALUES (?, ?, ?, ?, 1, ?)
+        INSERT INTO cnpjs (tenant_id, cnpj, razao_social, nome_fantasia, ativo, regime_tributario, uf)
+        VALUES (?, ?, ?, ?, 1, ?, ?)
         ON CONFLICT(tenant_id, cnpj) DO UPDATE SET
             razao_social = excluded.razao_social,
             nome_fantasia = excluded.nome_fantasia,
-            regime_tributario = excluded.regime_tributario
+            regime_tributario = excluded.regime_tributario,
+            uf = COALESCE(excluded.uf, cnpjs.uf)
         """,
-        (tenant_id, cnpj, razao_social, nome_fantasia, regime_tributario),
+        (tenant_id, cnpj, razao_social, nome_fantasia, regime_tributario, uf),
     )
     conn.commit()
     return get_cnpj_by_number(conn, tenant_id, cnpj)  # type: ignore[return-value]
@@ -217,6 +245,86 @@ def _row_to_cnpj(row: sqlite3.Row) -> Cnpj:
         nome_fantasia=row["nome_fantasia"],
         ativo=bool(row["ativo"]),
         regime_tributario=row["regime_tributario"],
+        uf=row["uf"],
+    )
+
+
+def create_obrigacao(conn: sqlite3.Connection, cnpj_id: int, tipo: str, vencimento: str) -> Obrigacao:
+    cursor = conn.execute(
+        "INSERT INTO obrigacoes (cnpj_id, tipo, vencimento, status) VALUES (?, ?, ?, 'pendente')",
+        (cnpj_id, tipo, vencimento),
+    )
+    conn.commit()
+    return Obrigacao(id=cursor.lastrowid, cnpj_id=cnpj_id, tipo=tipo, vencimento=vencimento, status="pendente")  # type: ignore[arg-type]
+
+
+def list_obrigacoes(conn: sqlite3.Connection, cnpj_id: int) -> list[Obrigacao]:
+    rows = conn.execute(
+        "SELECT * FROM obrigacoes WHERE cnpj_id = ? ORDER BY vencimento", (cnpj_id,)
+    ).fetchall()
+    return [_row_to_obrigacao(row) for row in rows]
+
+
+def marcar_obrigacao_entregue(conn: sqlite3.Connection, obrigacao_id: int) -> None:
+    conn.execute("UPDATE obrigacoes SET status = 'entregue' WHERE id = ?", (obrigacao_id,))
+    conn.commit()
+
+
+def get_obrigacao(conn: sqlite3.Connection, obrigacao_id: int) -> Obrigacao | None:
+    row = conn.execute("SELECT * FROM obrigacoes WHERE id = ?", (obrigacao_id,)).fetchone()
+    return _row_to_obrigacao(row) if row else None
+
+
+def _row_to_obrigacao(row: sqlite3.Row) -> Obrigacao:
+    return Obrigacao(id=row["id"], cnpj_id=row["cnpj_id"], tipo=row["tipo"], vencimento=row["vencimento"], status=row["status"])
+
+
+def create_certidao(
+    conn: sqlite3.Connection, cnpj_id: int, orgao: str, numero: str | None, emitida_em: str, valida_ate: str,
+    arquivo_nome: str, arquivo_conteudo: bytes,
+) -> Certidao:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        """
+        INSERT INTO certidoes (cnpj_id, orgao, numero, emitida_em, valida_ate, arquivo_nome, arquivo_conteudo, criado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (cnpj_id, orgao, numero, emitida_em, valida_ate, arquivo_nome, arquivo_conteudo, criado_em),
+    )
+    conn.commit()
+    return Certidao(
+        id=cursor.lastrowid, cnpj_id=cnpj_id, orgao=orgao, numero=numero, emitida_em=emitida_em,  # type: ignore[arg-type]
+        valida_ate=valida_ate, arquivo_nome=arquivo_nome, criado_em=criado_em,
+    )
+
+
+def latest_certidoes_by_orgao(conn: sqlite3.Connection, cnpj_id: int) -> dict[str, Certidao]:
+    """A certidão mais recente (maior `valida_ate`) de cada órgão daquele CNPJ."""
+    rows = conn.execute(
+        "SELECT * FROM certidoes WHERE cnpj_id = ? ORDER BY orgao, valida_ate DESC", (cnpj_id,)
+    ).fetchall()
+    resultado: dict[str, Certidao] = {}
+    for row in rows:
+        if row["orgao"] not in resultado:
+            resultado[row["orgao"]] = _row_to_certidao(row)
+    return resultado
+
+
+def get_certidao(conn: sqlite3.Connection, certidao_id: int) -> Certidao | None:
+    row = conn.execute("SELECT * FROM certidoes WHERE id = ?", (certidao_id,)).fetchone()
+    return _row_to_certidao(row) if row else None
+
+
+def get_certidao_arquivo(conn: sqlite3.Connection, certidao_id: int) -> bytes | None:
+    row = conn.execute("SELECT arquivo_conteudo FROM certidoes WHERE id = ?", (certidao_id,)).fetchone()
+    return row["arquivo_conteudo"] if row else None
+
+
+def _row_to_certidao(row: sqlite3.Row) -> Certidao:
+    return Certidao(
+        id=row["id"], cnpj_id=row["cnpj_id"], orgao=row["orgao"], numero=row["numero"],
+        emitida_em=row["emitida_em"], valida_ate=row["valida_ate"], arquivo_nome=row["arquivo_nome"],
+        criado_em=row["criado_em"],
     )
 
 

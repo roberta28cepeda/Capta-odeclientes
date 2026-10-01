@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
-from src.fiscal_monitor.models import AdminUser, Cnpj, Finding, Tenant
+from src.fiscal_monitor.models import AdminUser, Certidao, Cnpj, Finding, Obrigacao, Tenant
 
 DEFAULT_DB_PATH = "output/fiscal_monitor.db"  # não usado neste backend; mantido por simetria de assinatura
 
@@ -79,6 +79,26 @@ CREATE TABLE IF NOT EXISTS admin_users (
     criado_em TEXT NOT NULL,
     ativo BOOLEAN NOT NULL DEFAULT true
 );
+
+CREATE TABLE IF NOT EXISTS obrigacoes (
+    id SERIAL PRIMARY KEY,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    tipo TEXT NOT NULL,
+    vencimento TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pendente'
+);
+
+CREATE TABLE IF NOT EXISTS certidoes (
+    id SERIAL PRIMARY KEY,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    orgao TEXT NOT NULL,
+    numero TEXT,
+    emitida_em TEXT NOT NULL,
+    valida_ate TEXT NOT NULL,
+    arquivo_nome TEXT NOT NULL,
+    arquivo_conteudo BYTEA NOT NULL,
+    criado_em TEXT NOT NULL
+);
 """
 
 _CONNECTION_ENV_VARS = ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_URL_NON_POOLING")
@@ -109,6 +129,7 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
             cur.execute(SCHEMA)
             cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS acesso_token TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS contato_email TEXT")
+            cur.execute("ALTER TABLE cnpjs ADD COLUMN IF NOT EXISTS uf TEXT")
             cur.execute(
                 "UPDATE tenants SET acesso_token = md5(random()::text || id::text) WHERE acesso_token = ''"
             )
@@ -180,18 +201,20 @@ def upsert_cnpj(
     razao_social: str | None = None,
     nome_fantasia: str | None = None,
     regime_tributario: str | None = None,
+    uf: str | None = None,
 ) -> Cnpj:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO cnpjs (tenant_id, cnpj, razao_social, nome_fantasia, ativo, regime_tributario)
-            VALUES (%s, %s, %s, %s, true, %s)
+            INSERT INTO cnpjs (tenant_id, cnpj, razao_social, nome_fantasia, ativo, regime_tributario, uf)
+            VALUES (%s, %s, %s, %s, true, %s, %s)
             ON CONFLICT (tenant_id, cnpj) DO UPDATE SET
                 razao_social = EXCLUDED.razao_social,
                 nome_fantasia = EXCLUDED.nome_fantasia,
-                regime_tributario = EXCLUDED.regime_tributario
+                regime_tributario = EXCLUDED.regime_tributario,
+                uf = COALESCE(EXCLUDED.uf, cnpjs.uf)
             """,
-            (tenant_id, cnpj, razao_social, nome_fantasia, regime_tributario),
+            (tenant_id, cnpj, razao_social, nome_fantasia, regime_tributario, uf),
         )
     conn.commit()
     return get_cnpj_by_number(conn, tenant_id, cnpj)  # type: ignore[return-value]
@@ -227,6 +250,7 @@ def _row_to_cnpj(row) -> Cnpj:
         nome_fantasia=row["nome_fantasia"],
         ativo=row["ativo"],
         regime_tributario=row["regime_tributario"],
+        uf=row["uf"],
     )
 
 
@@ -400,4 +424,93 @@ def _row_to_admin_user(row) -> AdminUser:
         nome=row["nome"],
         criado_em=row["criado_em"],
         ativo=row["ativo"],
+    )
+
+
+def create_obrigacao(conn, cnpj_id: int, tipo: str, vencimento: str) -> Obrigacao:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO obrigacoes (cnpj_id, tipo, vencimento, status) VALUES (%s, %s, %s, 'pendente') RETURNING id",
+            (cnpj_id, tipo, vencimento),
+        )
+        obrigacao_id = cur.fetchone()["id"]
+    conn.commit()
+    return Obrigacao(id=obrigacao_id, cnpj_id=cnpj_id, tipo=tipo, vencimento=vencimento, status="pendente")
+
+
+def list_obrigacoes(conn, cnpj_id: int) -> list[Obrigacao]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM obrigacoes WHERE cnpj_id = %s ORDER BY vencimento", (cnpj_id,))
+        rows = cur.fetchall()
+    return [_row_to_obrigacao(row) for row in rows]
+
+
+def marcar_obrigacao_entregue(conn, obrigacao_id: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE obrigacoes SET status = 'entregue' WHERE id = %s", (obrigacao_id,))
+    conn.commit()
+
+
+def get_obrigacao(conn, obrigacao_id: int) -> Obrigacao | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM obrigacoes WHERE id = %s", (obrigacao_id,))
+        row = cur.fetchone()
+    return _row_to_obrigacao(row) if row else None
+
+
+def _row_to_obrigacao(row) -> Obrigacao:
+    return Obrigacao(id=row["id"], cnpj_id=row["cnpj_id"], tipo=row["tipo"], vencimento=row["vencimento"], status=row["status"])
+
+
+def create_certidao(
+    conn, cnpj_id: int, orgao: str, numero: str | None, emitida_em: str, valida_ate: str, arquivo_nome: str,
+    arquivo_conteudo: bytes,
+) -> Certidao:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO certidoes (cnpj_id, orgao, numero, emitida_em, valida_ate, arquivo_nome, arquivo_conteudo, criado_em)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+            """,
+            (cnpj_id, orgao, numero, emitida_em, valida_ate, arquivo_nome, psycopg2.Binary(arquivo_conteudo), criado_em),
+        )
+        certidao_id = cur.fetchone()["id"]
+    conn.commit()
+    return Certidao(
+        id=certidao_id, cnpj_id=cnpj_id, orgao=orgao, numero=numero, emitida_em=emitida_em, valida_ate=valida_ate,
+        arquivo_nome=arquivo_nome, criado_em=criado_em,
+    )
+
+
+def latest_certidoes_by_orgao(conn, cnpj_id: int) -> dict[str, Certidao]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM certidoes WHERE cnpj_id = %s ORDER BY orgao, valida_ate DESC", (cnpj_id,))
+        rows = cur.fetchall()
+    resultado: dict[str, Certidao] = {}
+    for row in rows:
+        if row["orgao"] not in resultado:
+            resultado[row["orgao"]] = _row_to_certidao(row)
+    return resultado
+
+
+def get_certidao(conn, certidao_id: int) -> Certidao | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM certidoes WHERE id = %s", (certidao_id,))
+        row = cur.fetchone()
+    return _row_to_certidao(row) if row else None
+
+
+def get_certidao_arquivo(conn, certidao_id: int) -> bytes | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT arquivo_conteudo FROM certidoes WHERE id = %s", (certidao_id,))
+        row = cur.fetchone()
+    return bytes(row["arquivo_conteudo"]) if row else None
+
+
+def _row_to_certidao(row) -> Certidao:
+    return Certidao(
+        id=row["id"], cnpj_id=row["cnpj_id"], orgao=row["orgao"], numero=row["numero"],
+        emitida_em=row["emitida_em"], valida_ate=row["valida_ate"], arquivo_nome=row["arquivo_nome"],
+        criado_em=row["criado_em"],
     )

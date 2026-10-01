@@ -198,3 +198,75 @@ def test_set_admin_user_ativo_toggles_flag():
     storage.set_admin_user_ativo(conn, usuario.id, False)
 
     assert storage.get_admin_user_by_username(conn, "maria").ativo is False
+
+
+def test_upsert_cnpj_stores_and_preserves_uf():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44", uf="SP")
+
+    cnpj = storage.get_cnpj_by_number(conn, tenant.id, "11.222.333/0001-44")
+    assert cnpj.uf == "SP"
+
+    # upsert sem uf não apaga o uf já salvo
+    storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44", razao_social="Novo Nome")
+    assert storage.get_cnpj_by_number(conn, tenant.id, "11.222.333/0001-44").uf == "SP"
+
+
+def test_create_and_list_obrigacoes():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    storage.create_obrigacao(conn, cnpj.id, "DAS", "2026-10-20")
+    storage.create_obrigacao(conn, cnpj.id, "DCTFWeb", "2026-10-15")
+
+    obrigacoes = storage.list_obrigacoes(conn, cnpj.id)
+
+    assert [o.tipo for o in obrigacoes] == ["DCTFWeb", "DAS"]  # ordenado por vencimento
+    assert all(o.status == "pendente" for o in obrigacoes)
+
+
+def test_marcar_obrigacao_entregue():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+    obrigacao = storage.create_obrigacao(conn, cnpj.id, "DAS", "2026-10-20")
+
+    storage.marcar_obrigacao_entregue(conn, obrigacao.id)
+
+    assert storage.get_obrigacao(conn, obrigacao.id).status == "entregue"
+
+
+def test_create_and_get_certidao_with_arquivo():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    certidao = storage.create_certidao(
+        conn, cnpj.id, "federal", "123ABC", "2026-09-01", "2027-03-01", "certidao.pdf", b"%PDF-1.4 conteudo"
+    )
+
+    assert certidao.orgao == "federal"
+    assert storage.get_certidao(conn, certidao.id).numero == "123ABC"
+    assert storage.get_certidao_arquivo(conn, certidao.id) == b"%PDF-1.4 conteudo"
+
+
+def test_latest_certidoes_by_orgao_returns_most_recent_per_orgao():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    storage.create_certidao(conn, cnpj.id, "federal", None, "2026-01-01", "2026-06-01", "antiga.pdf", b"antiga")
+    storage.create_certidao(conn, cnpj.id, "federal", None, "2026-09-01", "2027-03-01", "nova.pdf", b"nova")
+    storage.create_certidao(conn, cnpj.id, "sp", None, "2026-09-01", "2026-10-01", "sp.pdf", b"sp")
+
+    atuais = storage.latest_certidoes_by_orgao(conn, cnpj.id)
+
+    assert set(atuais.keys()) == {"federal", "sp"}
+    assert atuais["federal"].arquivo_nome == "nova.pdf"
+
+
+def test_get_certidao_arquivo_returns_none_when_missing():
+    conn = _conn()
+    assert storage.get_certidao_arquivo(conn, 999) is None

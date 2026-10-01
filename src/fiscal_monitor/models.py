@@ -30,6 +30,7 @@ class Cnpj:
     nome_fantasia: str | None
     ativo: bool
     regime_tributario: str | None = None
+    uf: str | None = None
 
 
 @dataclass
@@ -43,6 +44,41 @@ class Finding:
     vencimento: str | None
     pago: bool
     status: str
+
+
+@dataclass
+class Obrigacao:
+    """Obrigação fiscal recorrente de um CNPJ (ex: DAS, DCTFWeb, DEFIS), com
+    prazo e status — diferente de `Finding` (achado/pendência descoberta via
+    CSV importado): aqui é uma rotina esperada, não um problema encontrado.
+    """
+
+    id: int
+    cnpj_id: int
+    tipo: str
+    vencimento: str
+    status: str  # "pendente" ou "entregue"
+
+
+ORGAOS_CERTIDAO = {"federal", "sp", "rj"}
+
+
+@dataclass
+class Certidao:
+    """Metadados da certidão (PDF real, enviado pelo escritório) de um
+    órgão (federal/sp/rj) de um CNPJ — o conteúdo do arquivo fica à parte
+    (`storage.get_certidao_arquivo`), pra não carregar o PDF inteiro toda
+    vez que só a lista é exibida.
+    """
+
+    id: int
+    cnpj_id: int
+    orgao: str
+    numero: str | None
+    emitida_em: str
+    valida_ate: str
+    arquivo_nome: str
+    criado_em: str
 
 
 @dataclass

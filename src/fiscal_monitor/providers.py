@@ -136,7 +136,9 @@ class SerproIntegraContadorProvider:
 
 def import_portfolio_csv(conn, tenant_id: int, csv_file) -> tuple[int, str | None]:
     """Importa a carteira de CNPJs de um arquivo CSV já aberto
-    (colunas: cnpj,razao_social,nome_fantasia,regime_tributario).
+    (colunas: cnpj,razao_social,nome_fantasia,regime_tributario,uf — as
+    duas últimas são opcionais; `uf` define quais certidões estaduais são
+    exigidas pra cada empresa, ver `risco.py`).
 
     Compartilhado entre o CLI (`--import-portfolio`) e o formulário web de
     cadastro de escritório, pra não duplicar a validação. Retorna
@@ -163,6 +165,7 @@ def import_portfolio_csv(conn, tenant_id: int, csv_file) -> tuple[int, str | Non
             razao_social=(row.get("razao_social") or "").strip() or None,
             nome_fantasia=(row.get("nome_fantasia") or "").strip() or None,
             regime_tributario=regime,
+            uf=(row.get("uf") or "").strip().upper() or None,
         )
         count += 1
     return count, None

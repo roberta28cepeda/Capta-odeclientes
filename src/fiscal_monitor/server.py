@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 from datetime import date
 
-from flask import Flask, Response, after_this_request, jsonify, render_template_string, request, send_file
+from flask import Flask, Response, after_this_request, jsonify, redirect, render_template_string, request, send_file
 
 from src.common.webauth import admin_authenticated, cron_authorized, require_admin
 from src.fiscal_monitor import monitor, storage
@@ -38,7 +38,10 @@ from src.fiscal_monitor.preanalise import (
     only_digits,
     validar_cnpj,
 )
+from src.fiscal_monitor.models import ORGAOS_CERTIDAO
 from src.fiscal_monitor.providers import import_portfolio_csv
+from src.fiscal_monitor.reforma import FATURAMENTO_MAXIMO, FATURAMENTO_MINIMO, simular
+from src.fiscal_monitor.risco import calcular_score_risco, certidao_status, orgaos_exigidos
 from werkzeug.security import generate_password_hash
 
 _TENANTS_TEMPLATE = """
@@ -49,6 +52,7 @@ _TENANTS_TEMPLATE = """
 <p><a href="/pre-analise">Gerar pré-análise (só CNPJ, sem procuração) &rarr;</a></p>
 <p><a href="/admin/campanhas/leads">Campanhas de prospecção (leads, templates por tese) &rarr;</a></p>
 <p><a href="/admin/usuarios">Gerenciar usuários da equipe &rarr;</a></p>
+<p><a href="/reforma-tributaria">Simulador da Reforma Tributária &rarr;</a></p>
 <p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
@@ -66,16 +70,23 @@ _TENANT_DETAIL_TEMPLATE = """
 <!doctype html>
 <title>{{ tenant.nome }}</title>
 <h1>{{ tenant.nome }}</h1>
+<p><a href="/reforma-tributaria">Simulador da Reforma Tributária &rarr;</a></p>
 
 <h2>Carteira</h2>
 <table border="1" cellpadding="6" cellspacing="0">
-<tr><th>CNPJ</th><th>Razão social</th><th>Regime</th><th></th></tr>
+<tr><th>CNPJ</th><th>Razão social</th><th>UF</th><th>Regime</th><th>Risco</th><th></th></tr>
 {% for cnpj in cnpjs %}
 <tr>
   <td>{{ cnpj.cnpj }}</td>
   <td>{{ cnpj.razao_social or "-" }}</td>
+  <td>{{ cnpj.uf or "-" }}</td>
   <td>{{ cnpj.regime_tributario or "-" }}</td>
-  <td><a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/historico?token={{ request.args.get('token', '') }}">histórico</a></td>
+  <td>{{ scores[cnpj.id].score }} ({{ scores[cnpj.id].urgencia }})</td>
+  <td>
+    <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/historico?token={{ request.args.get('token', '') }}">histórico</a> ·
+    <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/obrigacoes?token={{ request.args.get('token', '') }}">obrigações</a> ·
+    <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/certidoes?token={{ request.args.get('token', '') }}">certidões</a>
+  </td>
 </tr>
 {% endfor %}
 </table>
@@ -130,6 +141,99 @@ _CNPJ_HISTORY_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not historico %}<p>Nenhum snapshot importado ainda para este CNPJ.</p>{% endif %}
+"""
+
+_OBRIGACOES_TEMPLATE = """
+<!doctype html>
+<title>Obrigações — {{ cnpj.cnpj }}</title>
+<h1>Obrigações — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+<p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
+
+<h2>Cadastrar obrigação</h2>
+<form method="post">
+  <p><label>Tipo (ex: DAS, DCTFWeb, DEFIS)<br><input type="text" name="tipo" required></label></p>
+  <p><label>Vencimento<br><input type="date" name="vencimento" required></label></p>
+  <button type="submit">Cadastrar</button>
+</form>
+
+<h2>Obrigações cadastradas</h2>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Tipo</th><th>Vencimento</th><th>Status</th><th></th></tr>
+{% for obrigacao in obrigacoes %}
+<tr>
+  <td>{{ obrigacao.tipo }}</td>
+  <td>{{ obrigacao.vencimento }}</td>
+  <td>{{ obrigacao.status }}</td>
+  <td>
+    {% if obrigacao.status == "pendente" %}
+    <form method="post" action="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/obrigacoes/{{ obrigacao.id }}/entregue?token={{ request.args.get('token', '') }}" style="display:inline">
+      <button type="submit">Marcar entregue</button>
+    </form>
+    {% endif %}
+  </td>
+</tr>
+{% endfor %}
+</table>
+{% if not obrigacoes %}<p>Nenhuma obrigação cadastrada ainda.</p>{% endif %}
+"""
+
+_CERTIDOES_TEMPLATE = """
+<!doctype html>
+<title>Certidões — {{ cnpj.cnpj }}</title>
+<h1>Certidões — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+<p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
+<p>Órgãos exigidos pra essa empresa (UF: {{ cnpj.uf or "não informada" }}): {{ orgaos|join(", ") }}</p>
+{% if certidoes %}<p><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/certidoes/unificado.pdf?token={{ request.args.get('token', '') }}">Baixar todas em um único PDF &rarr;</a></p>{% endif %}
+
+<h2>Enviar certidão (PDF real)</h2>
+<form method="post" enctype="multipart/form-data">
+  <p><label>Órgão<br>
+    <select name="orgao" required>
+      {% for orgao in todos_orgaos %}<option value="{{ orgao }}">{{ orgao|upper }}</option>{% endfor %}
+    </select>
+  </label></p>
+  <p><label>Número/código de controle (opcional)<br><input type="text" name="numero"></label></p>
+  <p><label>Data de emissão<br><input type="date" name="emitida_em" required></label></p>
+  <p><label>Validade<br><input type="date" name="valida_ate" required></label></p>
+  <p><label>Arquivo PDF<br><input type="file" name="arquivo" accept="application/pdf" required></label></p>
+  <button type="submit">Enviar</button>
+</form>
+
+<h2>Situação por órgão</h2>
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Órgão</th><th>Status</th><th>Validade</th><th>Número</th><th></th></tr>
+{% for orgao in orgaos %}
+{% set certidao = atuais.get(orgao) %}
+<tr>
+  <td>{{ orgao|upper }}</td>
+  <td>{{ status.get(orgao, "sem certidão") }}</td>
+  <td>{{ certidao.valida_ate if certidao else "-" }}</td>
+  <td>{{ certidao.numero if certidao and certidao.numero else "-" }}</td>
+  <td>{% if certidao %}<a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/certidoes/{{ certidao.id }}/baixar?token={{ request.args.get('token', '') }}">baixar</a>{% endif %}</td>
+</tr>
+{% endfor %}
+</table>
+"""
+
+_REFORMA_TEMPLATE = """
+<!doctype html>
+<title>Simulador da Reforma Tributária</title>
+<h1>Simulador da Reforma Tributária (ilustrativo)</h1>
+<p><a href="/tenants">&larr; voltar</a></p>
+<p style="color:#B23A48"><strong>{{ resultado.aviso if resultado else "Valores ilustrativos (placeholders), não use para cálculo real nem para orientar cliente sem validar com um contador." }}</strong></p>
+<form method="get">
+  <p><label>Faturamento anual (R$ {{ faturamento_min }} a R$ {{ faturamento_max }})<br>
+    <input type="number" name="faturamento" min="{{ faturamento_min }}" max="{{ faturamento_max }}" step="1000" value="{{ resultado.faturamento if resultado else '' }}" required></label></p>
+  <button type="submit">Simular</button>
+</form>
+{% if resultado %}
+<table border="1" cellpadding="6" cellspacing="0">
+<tr><th>Regime</th><th>Valor estimado</th></tr>
+<tr{% if resultado.melhor == "unificado" %} style="font-weight:bold"{% endif %}><td>Simples Unificado</td><td>R$ {{ "%.2f"|format(resultado.unificado) }}</td></tr>
+<tr{% if resultado.melhor == "hibrido" %} style="font-weight:bold"{% endif %}><td>Híbrido</td><td>R$ {{ "%.2f"|format(resultado.hibrido) }}</td></tr>
+</table>
+<p>Melhor opção (ilustrativa): <strong>{{ "Simples Unificado" if resultado.melhor == "unificado" else "Híbrido" }}</strong> — diferença de R$ {{ "%.2f"|format(resultado.diferenca) }}.</p>
+{% endif %}
 """
 
 _NOVO_TENANT_TEMPLATE = """
@@ -562,6 +666,12 @@ def create_app(
         findings = _flatten_open_findings(storage.findings_by_cnpj_for_tenant(conn, tenant_id))
         referencia = request.args.get("referencia") or date.today().strftime("%Y-%m")
         sublimite_alerts = monitor.check_sublimite_simples(conn, tenant_id, referencia)
+        scores = {
+            cnpj.id: calcular_score_risco(
+                cnpj.uf, storage.list_obrigacoes(conn, cnpj.id), storage.latest_certidoes_by_orgao(conn, cnpj.id)
+            )
+            for cnpj in cnpjs
+        }
         conn.close()
         return render_template_string(
             _TENANT_DETAIL_TEMPLATE,
@@ -569,6 +679,7 @@ def create_app(
             cnpjs=cnpjs,
             findings=findings,
             sublimite_alerts=sublimite_alerts,
+            scores=scores,
         )
 
     @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/historico")
@@ -585,6 +696,149 @@ def create_app(
         historico = storage.all_findings_for_cnpj(conn, cnpj_id)
         conn.close()
         return render_template_string(_CNPJ_HISTORY_TEMPLATE, cnpj=cnpj, historico=historico)
+
+    def _get_cnpj_or_404(conn, tenant_id: int, cnpj_id: int):
+        tenant = storage.get_tenant(conn, tenant_id)
+        cnpj = storage.get_cnpj(conn, cnpj_id)
+        if tenant is None or cnpj is None or cnpj.tenant_id != tenant_id:
+            return None, None
+        return tenant, cnpj
+
+    @app.route("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/obrigacoes", methods=["GET", "POST"])
+    def obrigacoes(tenant_id: int, cnpj_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        if request.method == "POST":
+            tipo = (request.form.get("tipo") or "").strip()
+            vencimento = (request.form.get("vencimento") or "").strip()
+            if tipo and vencimento:
+                storage.create_obrigacao(conn, cnpj_id, tipo, vencimento)
+
+        obrigacoes_lista = storage.list_obrigacoes(conn, cnpj_id)
+        conn.close()
+        return render_template_string(_OBRIGACOES_TEMPLATE, cnpj=cnpj, obrigacoes=obrigacoes_lista)
+
+    @app.post("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/obrigacoes/<int:obrigacao_id>/entregue")
+    def marcar_obrigacao_entregue_route(tenant_id: int, cnpj_id: int, obrigacao_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+        storage.marcar_obrigacao_entregue(conn, obrigacao_id)
+        conn.close()
+        token = request.args.get("token", "")
+        return redirect(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/obrigacoes?token={token}")
+
+    @app.route("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/certidoes", methods=["GET", "POST"])
+    def certidoes(tenant_id: int, cnpj_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        if request.method == "POST":
+            orgao = (request.form.get("orgao") or "").strip().lower()
+            emitida_em = (request.form.get("emitida_em") or "").strip()
+            valida_ate = (request.form.get("valida_ate") or "").strip()
+            numero = (request.form.get("numero") or "").strip() or None
+            arquivo = request.files.get("arquivo")
+            if orgao in ORGAOS_CERTIDAO and emitida_em and valida_ate and arquivo and arquivo.filename:
+                storage.create_certidao(
+                    conn, cnpj_id, orgao, numero, emitida_em, valida_ate, arquivo.filename, arquivo.read()
+                )
+
+        orgaos_lista = orgaos_exigidos(cnpj.uf)
+        atuais = storage.latest_certidoes_by_orgao(conn, cnpj_id)
+        status = {orgao: certidao_status(certidao.valida_ate) for orgao, certidao in atuais.items()}
+        conn.close()
+        return render_template_string(
+            _CERTIDOES_TEMPLATE, cnpj=cnpj, orgaos=orgaos_lista, todos_orgaos=sorted(ORGAOS_CERTIDAO),
+            atuais=atuais, status=status, certidoes=atuais,
+        )
+
+    @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/certidoes/<int:certidao_id>/baixar")
+    def baixar_certidao(tenant_id: int, cnpj_id: int, certidao_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+        certidao = storage.get_certidao(conn, certidao_id)
+        arquivo = storage.get_certidao_arquivo(conn, certidao_id)
+        conn.close()
+        if certidao is None or arquivo is None or certidao.cnpj_id != cnpj_id:
+            return jsonify({"error": "certidão não encontrada"}), 404
+        return Response(
+            arquivo, mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename={certidao.arquivo_nome}"},
+        )
+
+    @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/certidoes/unificado.pdf")
+    def baixar_certidoes_unificado(tenant_id: int, cnpj_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+        atuais = storage.latest_certidoes_by_orgao(conn, cnpj_id)
+        arquivos = [storage.get_certidao_arquivo(conn, certidao.id) for certidao in atuais.values()]
+        conn.close()
+        arquivos = [a for a in arquivos if a]
+        if not arquivos:
+            return jsonify({"error": "nenhuma certidão enviada ainda pra esse CNPJ"}), 404
+
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        for conteudo in arquivos:
+            writer.append(io.BytesIO(conteudo))
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        buffer.seek(0)
+        return Response(
+            buffer.read(), mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=certidoes_{only_digits(cnpj.cnpj)}.pdf"},
+        )
+
+    @app.get("/reforma-tributaria")
+    def reforma_tributaria():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+        faturamento_raw = request.args.get("faturamento")
+        resultado = None
+        if faturamento_raw:
+            try:
+                faturamento = float(faturamento_raw)
+            except ValueError:
+                faturamento = None
+            if faturamento is not None:
+                resultado = simular(faturamento)
+        return render_template_string(
+            _REFORMA_TEMPLATE, resultado=resultado, faturamento_min=int(FATURAMENTO_MINIMO),
+            faturamento_max=int(FATURAMENTO_MAXIMO),
+        )
 
     @app.get("/tenants/<int:tenant_id>/findings.json")
     def tenant_findings_json(tenant_id: int):

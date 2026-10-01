@@ -380,6 +380,40 @@ Por enquanto os achados fiscais e o faturamento entram via **CSV**
 e-CAC feito pelo próprio escritório, ou de qualquer scraper que ele já
 use. O sistema cuida do diff, priorização, alerta e dashboard.
 
+### Obrigações, certidões, score de risco e simulador da reforma tributária
+
+Quatro recursos adicionais, por CNPJ, acessíveis a partir da página de
+detalhe do CNPJ no dashboard (`/tenants/<id>/cnpjs/<id>`):
+
+1. **Obrigações acessórias** (`/.../obrigacoes`) — lista simples de
+   obrigações (tipo, vencimento, status) por CNPJ, cadastradas manualmente
+   e marcadas como entregues quando cumpridas. Entra no cálculo do score
+   de risco abaixo (obrigação pendente vencida pesa).
+2. **Certidões negativas** (`/.../certidoes`) — upload do PDF da certidão
+   (federal, e estadual de SP/RJ quando a `uf` do CNPJ for uma dessas
+   duas — ver `src/fiscal_monitor/risco.py`, `ORGAOS_POR_UF`), com data de
+   emissão e validade. O arquivo fica armazenado no banco (coluna
+   `BLOB`/`BYTEA`, sem depender de disco ou serviço externo de storage —
+   Vercel serverless não tem disco persistente). Dá pra baixar uma
+   certidão isolada ou todas juntas num único PDF (mesclado com `pypdf`).
+3. **Score de risco (0-100)** — calculado a partir de obrigações
+   atrasadas (até 70 pontos) e do estado de cada certidão exigida
+   (ausente, vencendo em até 15 dias, ou vencida), mostrado na lista de
+   CNPJs do escritório com a urgência (Alto/Médio/Baixo). É heurística
+   simples, pensada pra priorizar qual cliente olhar primeiro — não é
+   uma métrica oficial de nenhum órgão.
+4. **Simulador da Reforma Tributária** (`/reforma-tributaria`) — compara,
+   pra um faturamento anual informado, o regime "IVA unificado" (CBS+IBS)
+   com o "híbrido" (DAS + IVA sobre o excedente), mostrando qual dá menos
+   imposto. **As alíquotas usadas são ilustrativas** (a regulamentação
+   final ainda está em tramitação) — o simulador deixa esse aviso visível
+   na própria página, não deve ser usado como cálculo oficial.
+
+Esses 4 recursos foram portados do protótipo "Fiscalis" (enviado pelo
+usuário) pra dentro deste módulo, reaproveitando login, banco de dados e
+deploy já existentes, em vez de manter um segundo projeto (Node/TS/React)
+separado.
+
 ### Setup adicional
 
 Usa `WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_PHONE_NUMBER_ID` do módulo de
