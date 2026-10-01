@@ -127,6 +127,10 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
                 "DELETE FROM campanha_templates "
                 "WHERE tese = 'industria_tributaria_geral' AND tipo = 'inicial' AND headline LIKE '[AJUSTAR%'"
             )
+            cur.execute(
+                "DELETE FROM campanha_templates "
+                "WHERE tese = 'mei_regularizacao' AND tipo = 'inicial' AND headline LIKE '[AJUSTAR%'"
+            )
 
             for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
                 for tipo, campos in templates_do_tese.items():

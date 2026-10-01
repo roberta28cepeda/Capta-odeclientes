@@ -206,16 +206,30 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
     },
     "mei_regularizacao": {
         TIPO_INICIAL: {
-            "assunto": "[RASCUNHO] {{RAZAO_SOCIAL}} — regularização do MEI",
+            "assunto": "{{RAZAO_SOCIAL}} — MEI com pendência corre risco de ser cancelado",
             "tag": "REGULARIZAÇÃO MEI",
-            "headline": "[AJUSTAR: título da tese de regularização de MEI — ainda não recebi o texto/ângulo dessa tese.]",
-            "paragrafo1": "[AJUSTAR] Texto sobre a situação do MEI {{RAZAO_SOCIAL}} — preciso que você me passe o ângulo/pitch dessa tese (ex: pendência específica, prazo, isenção perdida etc.) pra escrever de verdade.",
-            "paragrafo2": "[AJUSTAR] Segundo parágrafo.",
-            "checklist": list(_CHECKLIST_FOLLOWUP_PADRAO),
-            "italico": "[AJUSTAR] Frase de urgência.",
+            "headline": "MEI com pendência pode ter o CNPJ cancelado pela Receita — e isso afeta até sua aposentadoria.",
+            "paragrafo1": (
+                "O MEI <strong>{{RAZAO_SOCIAL}}</strong> está com pendência (DAS em atraso e/ou declaração "
+                "anual não entregue). Enquanto isso não for resolvido, você não consegue emitir nota, abrir "
+                "conta PJ nem fechar contrato com empresas maiores — e corre risco real de ter o CNPJ "
+                "<strong style=\"color:#0c4a4a;\">cancelado de ofício</strong> pela Receita Federal."
+            ),
+            "paragrafo2": (
+                "Tem um efeito que pouca gente percebe: cada DAS em atraso é um mês sem contar pra sua "
+                "aposentadoria pelo INSS. Quanto mais tempo passa, maior o valor acumulado de juros e multa, "
+                "e maior o buraco na sua contribuição."
+            ),
+            "checklist": [
+                "Diagnóstico gratuito do que está pendente (DAS, declaração anual, excesso de faturamento)",
+                "Regularização completa, sem você precisar entender de Receita Federal",
+                "Evita o cancelamento automático do CNPJ",
+                "Orientação pra não perder tempo de contribuição no INSS",
+            ],
+            "italico": "Cada mês de DAS em atraso é mais juro agora, e um mês a menos de aposentadoria depois.",
             "cta_texto": "QUERO REGULARIZAR MEU MEI",
             "link_cta": _WHATSAPP_LINK,
-            "rodape_nota": _NOTAS_RODAPE_PADRAO,
+            "rodape_nota": "quanto mais cedo regularizado, menor o risco de perder o CNPJ e menor o custo final.",
         },
         TIPOS_FOLLOWUP[0]: _followup_rascunho("REGULARIZAÇÃO MEI"),
     },
