@@ -208,6 +208,45 @@ def buscar_telefones_pendentes(conn) -> dict:
     return {"leads_verificados": verificados, "encontrados": encontrados, "erros": erros}
 
 
+_MENSAGEM_WHATSAPP_DIVIDA = (
+    "⚠️ R$ {{VALOR}}… esse é o valor aproximado da pendência que identificamos vinculada à {{EMPRESA}}.\n\n"
+    "E tem um ponto importante: enquanto essa dívida continuar em aberto, o valor pode seguir aumentando "
+    "com juros e encargos.\n\n"
+    "Por isso, nosso time separou alguns horários para analisar a situação da {{EMPRESA}} e orientar "
+    "sobre as possibilidades de regularização.\n\n"
+    "📅 Temos disponibilidade [DIA] às [HORÁRIO 1] ou [DIA] às [HORÁRIO 2].\n\n"
+    "Qual dos dois horários funciona melhor pra você?"
+)
+
+# Mensagens reais (vindas do Apps Script) por tese — [DIA]/[HORÁRIO 1]/[HORÁRIO 2]
+# ficam literais de propósito: quem for mandar edita isso na hora, no WhatsApp,
+# antes de enviar (o envio em si nunca é automático). Tese sem mensagem própria
+# cai na mensagem padrão de dívida (`_MENSAGEM_WHATSAPP_DIVIDA`).
+_MENSAGENS_WHATSAPP_POR_TESE: dict[str, str] = {
+    "transportadoras_pgfn": _MENSAGEM_WHATSAPP_DIVIDA,
+    "contadores_certificado": (
+        "💰 Seus clientes já compram certificado digital… mas essa receita pode estar ficando na mesa.\n\n"
+        "Estamos ampliando a rede de contabilidades parceiras da Leactis para ajudar escritórios a "
+        "transformar uma demanda que já existe na carteira em uma nova fonte de receita.\n\n"
+        "🔓 Funciona assim: você indica o cliente, nosso time cuida de todo o atendimento e da emissão, "
+        "e seu escritório recebe por cada certificado emitido.\n\n"
+        "A parceria está sendo ampliada a partir do nosso relacionamento com a Fenacon e a Safeweb.\n\n"
+        "Quer que eu te mostre como seu escritório pode participar?"
+    ),
+    "simples_ibs_cbs": (
+        "⚠️ 2027 está chegando… e identificamos uma pendência relacionada ao Simples Nacional da "
+        "{{EMPRESA}} que merece atenção antes da virada do ano.\n\n"
+        "Dependendo do caso, deixar essa situação em aberto pode afetar a regularidade fiscal da empresa "
+        "e trazer consequências para sua permanência no regime.\n\n"
+        "Por isso, estamos antecipando essa análise com algumas empresas antes que o problema fique "
+        "para a última hora.\n\n"
+        "📅 Nosso time tem disponibilidade [DIA] às [HORÁRIO 1] ou [DIA] às [HORÁRIO 2] para analisar o "
+        "caso da {{EMPRESA}}.\n\n"
+        "Qual horário funciona melhor pra você?"
+    ),
+}
+
+
 def montar_link_whatsapp(lead: Lead) -> str | None:
     """Link `wa.me` com mensagem pré-escrita pra equipe mandar a primeira
     mensagem pro lead — nunca automático (ver `README.md`, decisão de
@@ -222,11 +261,8 @@ def montar_link_whatsapp(lead: Lead) -> str | None:
     if not numero.startswith("55"):
         numero = f"55{numero}"
     nome = lead.razao_social or lead.cnpj
-    mensagem = (
-        f"Olá! Aqui é da Leactis. Vi que a {nome} está na Lista de Devedores da PGFN"
-        + (f", com uma pendência de R$ {_formatar_valor_brl(lead.valor_divida)}" if lead.valor_divida else "")
-        + " e gostaria de conversar sobre como resolver isso. Podemos falar?"
-    )
+    template = _MENSAGENS_WHATSAPP_POR_TESE.get(lead.tese, _MENSAGEM_WHATSAPP_DIVIDA)
+    mensagem = template.replace("{{EMPRESA}}", nome).replace("{{VALOR}}", _formatar_valor_brl(lead.valor_divida))
     return f"https://wa.me/{numero}?text={quote(mensagem)}"
 
 

@@ -634,6 +634,17 @@ preparação:
    some da fila pra quem mais abrir a página depois (evita duas pessoas
    mandarem mensagem pro mesmo lead quando o número é compartilhado).
 
+A mensagem pré-escrita é a mesma que já era usada no Apps Script, por
+tese (`engine._MENSAGENS_WHATSAPP_POR_TESE`): `transportadoras_pgfn` usa
+o texto de dívida/juros, `simples_ibs_cbs` o texto de prazo
+2027/regularidade fiscal, `contadores_certificado` o texto de parceria
+(Fenacon/Safeweb). As teses sem mensagem própria ainda
+(`industria_ibs_cbs`, `contadores_tributaria`, `mei_regularizacao`,
+`industria_tributaria_geral`) caem no texto genérico de dívida. Os
+campos `[DIA]`, `[HORÁRIO 1]` e `[HORÁRIO 2]` ficam literais de
+propósito — quem for mandar edita isso no próprio WhatsApp antes de
+enviar, já que o envio nunca é automático mesmo.
+
 ### Sincronização com o Brevo (opcional)
 
 Com `BREVO_API_KEY` e `BREVO_ENGAJADOS_LIST_ID` configuradas, todo
@@ -650,8 +661,10 @@ normal, só sem sincronizar com o Brevo.
   sai no dia certo independente de o lead ter respondido ou não. Parar
   manualmente significa mudar o `status` do lead pra `pausado` direto no
   banco (ainda sem botão no dashboard pra isso).
-- **A mensagem de WhatsApp é genérica** — não muda por tese como o e-mail
-  muda; é um texto único usado pra qualquer lead com telefone.
+- **Nem toda tese tem mensagem de WhatsApp própria ainda** —
+  `industria_ibs_cbs`, `contadores_tributaria`, `mei_regularizacao` e
+  `industria_tributaria_geral` usam o texto genérico de dívida por
+  enquanto (ver seção "WhatsApp" acima).
 - **A busca de e-mail é best-effort** — nem toda empresa tem e-mail
   público achável via busca; CNPJ sem e-mail encontrado fica sem contato
   (não trava o restante do lote).

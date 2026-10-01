@@ -318,6 +318,40 @@ def test_montar_link_whatsapp_returns_none_without_telefone():
     assert engine.montar_link_whatsapp(lead) is None
 
 
+def test_montar_link_whatsapp_uses_dedicated_message_for_contadores_certificado():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese="contadores_certificado", razao_social="Escritório Y", email=None,
+        status="ativo", criado_em="", telefone="11912345678",
+    )
+
+    link = engine.montar_link_whatsapp(lead)
+
+    assert "certificado" in link.lower() or "Fenacon" in link
+
+
+def test_montar_link_whatsapp_uses_dedicated_message_for_simples_ibs_cbs():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese="simples_ibs_cbs", razao_social="Empresa X", email=None,
+        status="ativo", criado_em="", telefone="11912345678",
+    )
+
+    link = engine.montar_link_whatsapp(lead)
+
+    assert "Simples" in link
+    assert "Empresa" in link
+
+
+def test_montar_link_whatsapp_falls_back_to_divida_message_for_unmapped_tese():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese="mei_regularizacao", razao_social="Empresa X", email=None,
+        status="ativo", criado_em="", valor_divida=500.0, telefone="11912345678",
+    )
+
+    link = engine.montar_link_whatsapp(lead)
+
+    assert "pend" in link.lower()  # mensagem padrão de dívida
+
+
 def test_montar_resumo_whatsapp_lists_leads_with_links():
     lead = Lead(
         id=1, cnpj="11.222.333/0001-44", tese=TESE, razao_social="Empresa X", email=None, status="ativo",
