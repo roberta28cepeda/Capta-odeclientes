@@ -14,6 +14,7 @@ from datetime import date
 
 from flask import Flask, Response, after_this_request, jsonify, redirect, render_template_string, request, send_file
 
+from src.common.web_styles import page
 from src.common.webauth import admin_authenticated, cron_authorized, require_admin
 from src.fiscal_monitor import monitor, storage
 from src.fiscal_monitor.cron import check_all_tenants
@@ -46,18 +47,17 @@ from src.fiscal_monitor.reforma import FATURAMENTO_MAXIMO, FATURAMENTO_MINIMO, s
 from src.fiscal_monitor.risco import calcular_score_risco, certidao_status, orgaos_exigidos
 from werkzeug.security import generate_password_hash
 
-_TENANTS_TEMPLATE = """
-<!doctype html>
-<title>Monitoramento Fiscal</title>
+_TENANTS_TEMPLATE = page("Monitoramento Fiscal", """
 <h1>Escritórios monitorados</h1>
-<p><a href="/admin/tenants/novo">+ Cadastrar novo escritório</a></p>
-<p><a href="/pre-analise">Gerar pré-análise (só CNPJ, sem procuração) &rarr;</a></p>
-<p><a href="/admin/campanhas/leads">Campanhas de prospecção (leads, templates por tese) &rarr;</a></p>
-<p><a href="/admin/usuarios">Gerenciar usuários da equipe &rarr;</a></p>
-<p><a href="/reforma-tributaria">Simulador da Reforma Tributária &rarr;</a></p>
-<p><a href="/admin/pgfn-dados-abertos">Importar Dados Abertos da PGFN (data de inscrição/ajuizamento) &rarr;</a></p>
-<p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
-<table border="1" cellpadding="6" cellspacing="0">
+<nav class="nav">
+  <a href="/admin/tenants/novo">+ Cadastrar novo escritório</a>
+  <a href="/pre-analise">Gerar pré-análise (só CNPJ, sem procuração)</a>
+  <a href="/admin/campanhas/leads">Campanhas de prospecção</a>
+  <a href="/admin/usuarios">Usuários da equipe</a>
+  <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
+  <a href="/admin/pgfn-dados-abertos">Dados Abertos da PGFN</a>
+</nav>
+<table>
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
 {% for tenant, count in tenants %}
 <tr>
@@ -67,16 +67,18 @@ _TENANTS_TEMPLATE = """
 </tr>
 {% endfor %}
 </table>
-"""
+<p><small><a href="/privacidade">Política de Privacidade e LGPD</a></small></p>
+""")
 
-_TENANT_DETAIL_TEMPLATE = """
-<!doctype html>
-<title>{{ tenant.nome }}</title>
+_TENANT_DETAIL_TEMPLATE = page("{{ tenant.nome }}", """
+<p><a href="/tenants">&larr; voltar</a></p>
 <h1>{{ tenant.nome }}</h1>
-<p><a href="/reforma-tributaria">Simulador da Reforma Tributária &rarr;</a></p>
+<nav class="nav">
+  <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
+</nav>
 
 <h2>Carteira</h2>
-<table border="1" cellpadding="6" cellspacing="0">
+<table>
 <tr><th>CNPJ</th><th>Razão social</th><th>UF</th><th>Regime</th><th>Risco</th><th></th></tr>
 {% for cnpj in cnpjs %}
 <tr>
@@ -96,7 +98,7 @@ _TENANT_DETAIL_TEMPLATE = """
 
 {% if sublimite_alerts %}
 <h2>Alertas de sublimite do Simples Nacional</h2>
-<table border="1" cellpadding="6" cellspacing="0">
+<table>
 <tr><th>CNPJ</th><th>Razão social</th><th>Faturamento 12m</th><th>Situação</th></tr>
 {% for item in sublimite_alerts %}
 <tr>
@@ -110,7 +112,7 @@ _TENANT_DETAIL_TEMPLATE = """
 {% endif %}
 
 <h2>Achados em aberto (nova/recorrente)</h2>
-<table border="1" cellpadding="6" cellspacing="0">
+<table>
 <tr><th>CNPJ</th><th>Razão social</th><th>Esfera</th><th>Tipo</th><th>Descrição</th><th>Status</th></tr>
 {% for cnpj, finding in findings %}
 <tr>
@@ -124,14 +126,12 @@ _TENANT_DETAIL_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not findings %}<p>Nenhum achado em aberto.</p>{% endif %}
-"""
+""")
 
-_CNPJ_HISTORY_TEMPLATE = """
-<!doctype html>
-<title>Histórico — {{ cnpj.cnpj }}</title>
-<h1>Histórico — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+_CNPJ_HISTORY_TEMPLATE = page("Histórico — {{ cnpj.cnpj }}", """
 <p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
-<table border="1" cellpadding="6" cellspacing="0">
+<h1>Histórico — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+<table>
 <tr><th>Verificado em</th><th>Esfera</th><th>Tipo</th><th>Descrição</th><th>Status</th></tr>
 {% for verificado_em, provider, finding in historico %}
 <tr>
@@ -144,23 +144,21 @@ _CNPJ_HISTORY_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not historico %}<p>Nenhum snapshot importado ainda para este CNPJ.</p>{% endif %}
-"""
+""")
 
-_OBRIGACOES_TEMPLATE = """
-<!doctype html>
-<title>Obrigações — {{ cnpj.cnpj }}</title>
-<h1>Obrigações — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+_OBRIGACOES_TEMPLATE = page("Obrigações — {{ cnpj.cnpj }}", """
 <p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
+<h1>Obrigações — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
 
 <h2>Cadastrar obrigação</h2>
-<form method="post">
-  <p><label>Tipo (ex: DAS, DCTFWeb, DEFIS)<br><input type="text" name="tipo" required></label></p>
-  <p><label>Vencimento<br><input type="date" name="vencimento" required></label></p>
+<form method="post" class="card">
+  <label>Tipo (ex: DAS, DCTFWeb, DEFIS)<input type="text" name="tipo" required></label>
+  <label>Vencimento<input type="date" name="vencimento" required></label>
   <button type="submit">Cadastrar</button>
 </form>
 
 <h2>Obrigações cadastradas</h2>
-<table border="1" cellpadding="6" cellspacing="0">
+<table>
 <tr><th>Tipo</th><th>Vencimento</th><th>Status</th><th></th></tr>
 {% for obrigacao in obrigacoes %}
 <tr>
@@ -169,7 +167,7 @@ _OBRIGACOES_TEMPLATE = """
   <td>{{ obrigacao.status }}</td>
   <td>
     {% if obrigacao.status == "pendente" %}
-    <form method="post" action="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/obrigacoes/{{ obrigacao.id }}/entregue?token={{ request.args.get('token', '') }}" style="display:inline">
+    <form method="post" action="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/obrigacoes/{{ obrigacao.id }}/entregue?token={{ request.args.get('token', '') }}" class="inline">
       <button type="submit">Marcar entregue</button>
     </form>
     {% endif %}
@@ -178,32 +176,30 @@ _OBRIGACOES_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not obrigacoes %}<p>Nenhuma obrigação cadastrada ainda.</p>{% endif %}
-"""
+""")
 
-_CERTIDOES_TEMPLATE = """
-<!doctype html>
-<title>Certidões — {{ cnpj.cnpj }}</title>
-<h1>Certidões — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+_CERTIDOES_TEMPLATE = page("Certidões — {{ cnpj.cnpj }}", """
 <p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
+<h1>Certidões — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
 <p>Órgãos exigidos pra essa empresa (UF: {{ cnpj.uf or "não informada" }}): {{ orgaos|join(", ") }}</p>
 {% if certidoes %}<p><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/certidoes/unificado.pdf?token={{ request.args.get('token', '') }}">Baixar todas em um único PDF &rarr;</a></p>{% endif %}
 
 <h2>Enviar certidão (PDF real)</h2>
-<form method="post" enctype="multipart/form-data">
-  <p><label>Órgão<br>
+<form method="post" enctype="multipart/form-data" class="card">
+  <label>Órgão
     <select name="orgao" required>
       {% for orgao in todos_orgaos %}<option value="{{ orgao }}">{{ orgao|upper }}</option>{% endfor %}
     </select>
-  </label></p>
-  <p><label>Número/código de controle (opcional)<br><input type="text" name="numero"></label></p>
-  <p><label>Data de emissão<br><input type="date" name="emitida_em" required></label></p>
-  <p><label>Validade<br><input type="date" name="valida_ate" required></label></p>
-  <p><label>Arquivo PDF<br><input type="file" name="arquivo" accept="application/pdf" required></label></p>
+  </label>
+  <label>Número/código de controle (opcional)<input type="text" name="numero"></label>
+  <label>Data de emissão<input type="date" name="emitida_em" required></label>
+  <label>Validade<input type="date" name="valida_ate" required></label>
+  <label>Arquivo PDF<input type="file" name="arquivo" accept="application/pdf" required></label>
   <button type="submit">Enviar</button>
 </form>
 
 <h2>Situação por órgão</h2>
-<table border="1" cellpadding="6" cellspacing="0">
+<table>
 <tr><th>Órgão</th><th>Status</th><th>Validade</th><th>Número</th><th></th></tr>
 {% for orgao in orgaos %}
 {% set certidao = atuais.get(orgao) %}
@@ -216,65 +212,61 @@ _CERTIDOES_TEMPLATE = """
 </tr>
 {% endfor %}
 </table>
-"""
+""")
 
-_REFORMA_TEMPLATE = """
-<!doctype html>
-<title>Simulador da Reforma Tributária</title>
-<h1>Simulador da Reforma Tributária (ilustrativo)</h1>
+_REFORMA_TEMPLATE = page("Simulador da Reforma Tributária", """
 <p><a href="/tenants">&larr; voltar</a></p>
-<p style="color:#B23A48"><strong>{{ resultado.aviso if resultado else "Valores ilustrativos (placeholders), não use para cálculo real nem para orientar cliente sem validar com um contador." }}</strong></p>
-<form method="get">
-  <p><label>Faturamento anual (R$ {{ faturamento_min }} a R$ {{ faturamento_max }})<br>
-    <input type="number" name="faturamento" min="{{ faturamento_min }}" max="{{ faturamento_max }}" step="1000" value="{{ resultado.faturamento if resultado else '' }}" required></label></p>
+<h1>Simulador da Reforma Tributária (ilustrativo)</h1>
+<div class="alert">{{ resultado.aviso if resultado else "Valores ilustrativos (placeholders), não use para cálculo real nem para orientar cliente sem validar com um contador." }}</div>
+<form method="get" class="card">
+  <label>Faturamento anual (R$ {{ faturamento_min }} a R$ {{ faturamento_max }})
+    <input type="number" name="faturamento" min="{{ faturamento_min }}" max="{{ faturamento_max }}" step="1000" value="{{ resultado.faturamento if resultado else '' }}" required>
+  </label>
   <button type="submit">Simular</button>
 </form>
 {% if resultado %}
-<table border="1" cellpadding="6" cellspacing="0">
+<table>
 <tr><th>Regime</th><th>Valor estimado</th></tr>
 <tr{% if resultado.melhor == "unificado" %} style="font-weight:bold"{% endif %}><td>Simples Unificado</td><td>R$ {{ "%.2f"|format(resultado.unificado) }}</td></tr>
 <tr{% if resultado.melhor == "hibrido" %} style="font-weight:bold"{% endif %}><td>Híbrido</td><td>R$ {{ "%.2f"|format(resultado.hibrido) }}</td></tr>
 </table>
 <p>Melhor opção (ilustrativa): <strong>{{ "Simples Unificado" if resultado.melhor == "unificado" else "Híbrido" }}</strong> — diferença de R$ {{ "%.2f"|format(resultado.diferenca) }}.</p>
 {% endif %}
-"""
+""")
 
-_NOVO_TENANT_TEMPLATE = """
-<!doctype html>
-<title>Cadastrar escritório</title>
-<h1>Cadastrar novo escritório</h1>
+_NOVO_TENANT_TEMPLATE = page("Cadastrar escritório", """
 <p><a href="/tenants">&larr; voltar pra lista</a></p>
-{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
-<form method="post" enctype="multipart/form-data">
-  <p><label>Nome do escritório<br><input type="text" name="nome" required value="{{ nome or '' }}"></label></p>
-  <p><label>WhatsApp de contato (opcional)<br><input type="text" name="whatsapp" placeholder="5511999999999" value="{{ whatsapp or '' }}"></label></p>
-  <p><label>E-mail de contato (opcional)<br><input type="email" name="email" value="{{ email or '' }}"></label></p>
-  <p><label>Plano (opcional)<br><input type="text" name="plano" value="{{ plano or '' }}"></label></p>
-  <p><label>Carteira de CNPJs — CSV (opcional, pode importar depois)<br>
-     <input type="file" name="carteira" accept=".csv"><br>
-     <small>colunas: cnpj,razao_social,nome_fantasia,regime_tributario</small></label></p>
+<h1>Cadastrar novo escritório</h1>
+{% if erro %}<div class="alert">{{ erro }}</div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="card">
+  <label>Nome do escritório<input type="text" name="nome" required value="{{ nome or '' }}"></label>
+  <label>WhatsApp de contato (opcional)<input type="text" name="whatsapp" placeholder="5511999999999" value="{{ whatsapp or '' }}"></label>
+  <label>E-mail de contato (opcional)<input type="email" name="email" value="{{ email or '' }}"></label>
+  <label>Plano (opcional)<input type="text" name="plano" value="{{ plano or '' }}"></label>
+  <label>Carteira de CNPJs — CSV (opcional, pode importar depois)
+    <input type="file" name="carteira" accept=".csv">
+    <small>colunas: cnpj,razao_social,nome_fantasia,regime_tributario</small>
+  </label>
   <button type="submit">Cadastrar</button>
 </form>
-"""
+""")
 
-_USUARIOS_TEMPLATE = """
-<!doctype html>
-<title>Usuários da equipe</title>
-<h1>Usuários da equipe</h1>
+_USUARIOS_TEMPLATE = page("Usuários da equipe", """
 <p><a href="/tenants">&larr; voltar</a></p>
-{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
-{% if sucesso %}<p style="color:#1a7a3c"><strong>{{ sucesso }}</strong></p>{% endif %}
+<h1>Usuários da equipe</h1>
+{% if erro %}<div class="alert">{{ erro }}</div>{% endif %}
+{% if sucesso %}<div class="success">{{ sucesso }}</div>{% endif %}
 
 <h2>Cadastrar novo acesso</h2>
-<form method="post">
-  <p><label>Nome<br><input type="text" name="nome" value="{{ nome or '' }}"></label></p>
-  <p><label>Usuário (login)<br><input type="text" name="username" required value="{{ username or '' }}"></label></p>
-  <p><label>Senha<br><input type="password" name="password" required minlength="8"></label></p>
+<form method="post" class="card">
+  <label>Nome<input type="text" name="nome" value="{{ nome or '' }}"></label>
+  <label>Usuário (login)<input type="text" name="username" required value="{{ username or '' }}"></label>
+  <label>Senha<input type="password" name="password" required minlength="8"></label>
   <button type="submit">Cadastrar</button>
 </form>
 
 <h2>Acessos cadastrados</h2>
-<table border="1" cellpadding="6" cellspacing="0">
+<table>
 <tr><th>Usuário</th><th>Nome</th><th>Criado em</th><th>Status</th><th></th></tr>
 {% for usuario in usuarios %}
 <tr>
@@ -283,7 +275,7 @@ _USUARIOS_TEMPLATE = """
   <td>{{ usuario.criado_em[:10] }}</td>
   <td>{{ "ativo" if usuario.ativo else "desativado" }}</td>
   <td>
-    <form method="post" action="/admin/usuarios/{{ usuario.id }}/alternar-ativo" style="display:inline">
+    <form method="post" action="/admin/usuarios/{{ usuario.id }}/alternar-ativo" class="inline">
       <button type="submit">{{ "Desativar" if usuario.ativo else "Reativar" }}</button>
     </form>
   </td>
@@ -291,7 +283,7 @@ _USUARIOS_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not usuarios %}<p>Nenhum acesso individual cadastrado ainda — só o usuário mestre (ADMIN_USERNAME).</p>{% endif %}
-"""
+""")
 
 _PGFN_DADOS_ABERTOS_TEMPLATE = """
 <!doctype html>
