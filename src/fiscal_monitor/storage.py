@@ -17,6 +17,7 @@ if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.enviro
         DEFAULT_DB_PATH,
         add_finding,
         all_findings_for_cnpj,
+        buscar_dados_abertos_por_inscricoes,
         connect,
         create_admin_user,
         create_certidao,
@@ -43,12 +44,14 @@ if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.enviro
         record_faturamento,
         set_admin_user_ativo,
         upsert_cnpj,
+        upsert_dividas_abertas_pgfn,
     )
 else:
     from src.fiscal_monitor.storage_sqlite import (  # noqa: F401
         DEFAULT_DB_PATH,
         add_finding,
         all_findings_for_cnpj,
+        buscar_dados_abertos_por_inscricoes,
         connect,
         create_admin_user,
         create_certidao,
@@ -75,4 +78,5 @@ else:
         record_faturamento,
         set_admin_user_ativo,
         upsert_cnpj,
+        upsert_dividas_abertas_pgfn,
     )

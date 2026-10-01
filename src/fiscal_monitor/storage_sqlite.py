@@ -91,6 +91,20 @@ CREATE TABLE IF NOT EXISTS admin_users (
     criado_em TEXT NOT NULL,
     ativo INTEGER NOT NULL DEFAULT 1
 );
+
+CREATE TABLE IF NOT EXISTS pgfn_dividas_abertas (
+    numero_inscricao TEXT PRIMARY KEY,
+    cnpj TEXT NOT NULL,
+    uf TEXT,
+    receita_principal TEXT,
+    situacao_inscricao TEXT NOT NULL,
+    data_inscricao TEXT,
+    indicador_ajuizado INTEGER NOT NULL DEFAULT 0,
+    valor_consolidado REAL,
+    base_referencia TEXT NOT NULL,
+    importado_em TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pgfn_dividas_abertas_cnpj_idx ON pgfn_dividas_abertas(cnpj);
 """
 
 
@@ -495,3 +509,56 @@ def _row_to_admin_user(row: sqlite3.Row) -> AdminUser:
         criado_em=row["criado_em"],
         ativo=bool(row["ativo"]),
     )
+
+
+def upsert_dividas_abertas_pgfn(conn: sqlite3.Connection, registros: list[dict], base_referencia: str) -> int:
+    agora = datetime.now(timezone.utc).isoformat()
+    conn.executemany(
+        """
+        INSERT INTO pgfn_dividas_abertas
+            (numero_inscricao, cnpj, uf, receita_principal, situacao_inscricao,
+             data_inscricao, indicador_ajuizado, valor_consolidado, base_referencia, importado_em)
+        VALUES (:numero_inscricao, :cnpj, :uf, :receita_principal, :situacao_inscricao,
+                :data_inscricao, :indicador_ajuizado, :valor_consolidado, :base_referencia, :importado_em)
+        ON CONFLICT(numero_inscricao) DO UPDATE SET
+            cnpj = excluded.cnpj,
+            uf = excluded.uf,
+            receita_principal = excluded.receita_principal,
+            situacao_inscricao = excluded.situacao_inscricao,
+            data_inscricao = excluded.data_inscricao,
+            indicador_ajuizado = excluded.indicador_ajuizado,
+            valor_consolidado = excluded.valor_consolidado,
+            base_referencia = excluded.base_referencia,
+            importado_em = excluded.importado_em
+        """,
+        [
+            {
+                **registro,
+                "indicador_ajuizado": int(registro["indicador_ajuizado"]),
+                "base_referencia": base_referencia,
+                "importado_em": agora,
+            }
+            for registro in registros
+        ],
+    )
+    conn.commit()
+    return len(registros)
+
+
+def buscar_dados_abertos_por_inscricoes(conn: sqlite3.Connection, numeros: list[str]) -> dict[str, dict]:
+    if not numeros:
+        return {}
+    placeholders = ",".join("?" for _ in numeros)
+    rows = conn.execute(
+        "SELECT numero_inscricao, data_inscricao, situacao_inscricao, indicador_ajuizado "
+        f"FROM pgfn_dividas_abertas WHERE numero_inscricao IN ({placeholders})",
+        numeros,
+    ).fetchall()
+    return {
+        row["numero_inscricao"]: {
+            "data_inscricao": row["data_inscricao"],
+            "situacao_inscricao": row["situacao_inscricao"],
+            "indicador_ajuizado": bool(row["indicador_ajuizado"]),
+        }
+        for row in rows
+    }

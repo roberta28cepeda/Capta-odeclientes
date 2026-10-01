@@ -21,10 +21,12 @@ from src.fiscal_monitor.infosimples import (
     ConsultaDebitosError,
     consultar_cnd_federal,
     consultar_lista_devedores,
+    enriquecer_com_dados_abertos,
     gerar_alertas_fiscais,
     montar_divida_ativa,
     montar_situacao_fiscal,
 )
+from src.fiscal_monitor.pgfn_dados_abertos import ArquivoDadosAbertosError, importar_arquivo
 from src.fiscal_monitor.pdf import render_pre_analise_pdf
 from src.fiscal_monitor.preanalise import (
     CartaoCnpjError,
@@ -53,6 +55,7 @@ _TENANTS_TEMPLATE = """
 <p><a href="/admin/campanhas/leads">Campanhas de prospecção (leads, templates por tese) &rarr;</a></p>
 <p><a href="/admin/usuarios">Gerenciar usuários da equipe &rarr;</a></p>
 <p><a href="/reforma-tributaria">Simulador da Reforma Tributária &rarr;</a></p>
+<p><a href="/admin/pgfn-dados-abertos">Importar Dados Abertos da PGFN (data de inscrição/ajuizamento) &rarr;</a></p>
 <p style="font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 <table border="1" cellpadding="6" cellspacing="0">
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
@@ -288,6 +291,25 @@ _USUARIOS_TEMPLATE = """
 {% endfor %}
 </table>
 {% if not usuarios %}<p>Nenhum acesso individual cadastrado ainda — só o usuário mestre (ADMIN_USERNAME).</p>{% endif %}
+"""
+
+_PGFN_DADOS_ABERTOS_TEMPLATE = """
+<!doctype html>
+<title>Dados Abertos da PGFN</title>
+<h1>Dados Abertos da PGFN</h1>
+<p><a href="/tenants">&larr; voltar</a></p>
+<p>Importa o arquivo trimestral de Dados Abertos da dívida ativa (baixado em
+gov.br/pgfn &rarr; Acesso à Informação &rarr; Dados Abertos — <strong>não</strong>
+confundir com a "Lista de Devedores"). Isso completa a pré-análise com data
+de inscrição e se a dívida já foi ajuizada ou protestada, pra cada
+inscrição que também aparecer numa consulta futura.</p>
+{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
+{% if sucesso %}<p style="color:#1a7a3c"><strong>{{ sucesso }}</strong></p>{% endif %}
+<form method="post" enctype="multipart/form-data">
+  <p><label>Referência (ex: 2026-03)<br><input type="text" name="base_referencia" required placeholder="AAAA-MM" value="{{ base_referencia or '' }}"></label></p>
+  <p><label>Arquivo (.xlsx ou .csv)<br><input type="file" name="arquivo" accept=".xlsx,.csv" required></label></p>
+  <button type="submit">Importar</button>
+</form>
 """
 
 _TENANT_CRIADO_TEMPLATE = """
@@ -526,6 +548,43 @@ def create_app(
         conn.close()
         return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios)
 
+    @app.route("/admin/pgfn-dados-abertos", methods=["GET", "POST"])
+    def pgfn_dados_abertos():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+
+        if request.method == "GET":
+            return render_template_string(_PGFN_DADOS_ABERTOS_TEMPLATE)
+
+        base_referencia = (request.form.get("base_referencia") or "").strip()
+        arquivo = request.files.get("arquivo")
+
+        if not base_referencia or not arquivo or not arquivo.filename:
+            return (
+                render_template_string(
+                    _PGFN_DADOS_ABERTOS_TEMPLATE,
+                    erro="Referência e arquivo são obrigatórios.",
+                    base_referencia=base_referencia,
+                ),
+                400,
+            )
+
+        conn = _connect()
+        try:
+            quantidade = importar_arquivo(conn, io.BytesIO(arquivo.stream.read()), arquivo.filename, base_referencia)
+        except ArquivoDadosAbertosError as exc:
+            conn.close()
+            return (
+                render_template_string(_PGFN_DADOS_ABERTOS_TEMPLATE, erro=str(exc), base_referencia=base_referencia),
+                400,
+            )
+        conn.close()
+        return render_template_string(
+            _PGFN_DADOS_ABERTOS_TEMPLATE,
+            sucesso=f"{quantidade} inscrição(ões) importada(s)/atualizada(s).",
+        )
+
     @app.route("/pre-analise", methods=["GET", "POST"])
     def pre_analise():
         unauthorized = require_admin()
@@ -589,6 +648,12 @@ def create_app(
             try:
                 situacao_fiscal = montar_situacao_fiscal(consultar_cnd_federal(cnpj, infosimples_token))
                 divida_ativa = montar_divida_ativa(consultar_lista_devedores(cnpj, infosimples_token))
+                if divida_ativa:
+                    conn = _connect()
+                    try:
+                        divida_ativa = enriquecer_com_dados_abertos(conn, divida_ativa)
+                    finally:
+                        conn.close()
                 alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa)
             except ConsultaDebitosError as exc:
                 alertas.append(f"Não foi possível consultar situação fiscal/dívida ativa (PGFN): {exc}")

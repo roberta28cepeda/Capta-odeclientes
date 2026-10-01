@@ -58,6 +58,12 @@ class SituacaoFiscalPgfn:
 class DebitoInscricao:
     inscricao: str
     valor_divida: float
+    # Preenchidos depois, via `enriquecer_com_dados_abertos`, cruzando com a
+    # base dos Dados Abertos da PGFN (ver `pgfn_dados_abertos.py`) — a
+    # consulta "Lista de Devedores" acima não traz essas duas informações.
+    data_inscricao: str | None = None
+    situacao_inscricao: str | None = None
+    ajuizada: bool | None = None
 
 
 @dataclass
@@ -153,6 +159,40 @@ def formatar_valor_brl(valor: float) -> str:
     return f"{valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
 
+# Situações da PGFN (campo `SITUACAO_INSCRICAO` dos Dados Abertos) que
+# indicam execução fiscal já ajuizada — além do indicador binário
+# `INDICADOR_AJUIZADO`, que já cobre a maioria dos casos.
+_SITUACOES_AJUIZADAS = {"AJUIZADA", "AJUIZ PARCELADA", "OUTROS AJUIZADA"}
+_SITUACOES_PROTESTADAS = {"PROTESTADA"}
+
+
+def enriquecer_com_dados_abertos(conn, divida_ativa: DividaAtivaPgfn | None) -> DividaAtivaPgfn | None:
+    """Completa cada `DebitoInscricao` da Lista de Devedores com data de
+    inscrição e situação, cruzando pelo número de inscrição com a base dos
+    Dados Abertos da PGFN já importada (ver `pgfn_dados_abertos.py`). Sem
+    import feito ainda, ou sem bater nenhuma inscrição, não muda nada.
+    """
+    if divida_ativa is None:
+        return None
+
+    from src.fiscal_monitor import storage
+
+    numeros = [debito.inscricao for natureza in divida_ativa.naturezas for debito in natureza.debitos]
+    dados_por_inscricao = storage.buscar_dados_abertos_por_inscricoes(conn, numeros)
+    if not dados_por_inscricao:
+        return divida_ativa
+
+    for natureza in divida_ativa.naturezas:
+        for debito in natureza.debitos:
+            dados = dados_por_inscricao.get(debito.inscricao)
+            if dados:
+                debito.data_inscricao = dados["data_inscricao"]
+                debito.situacao_inscricao = dados["situacao_inscricao"]
+                debito.ajuizada = bool(dados["indicador_ajuizado"]) or dados["situacao_inscricao"] in _SITUACOES_AJUIZADAS
+
+    return divida_ativa
+
+
 def gerar_alertas_fiscais(
     situacao_fiscal: SituacaoFiscalPgfn | None, divida_ativa: DividaAtivaPgfn | None
 ) -> list[str]:
@@ -171,5 +211,20 @@ def gerar_alertas_fiscais(
             f"Inscrito na Lista de Devedores da PGFN — dívida ativa total de "
             f"R$ {formatar_valor_brl(divida_ativa.total_divida)}."
         )
+
+    if divida_ativa:
+        debitos = [debito for natureza in divida_ativa.naturezas for debito in natureza.debitos]
+        ajuizadas = [d for d in debitos if d.ajuizada]
+        protestadas = [d for d in debitos if d.situacao_inscricao in _SITUACOES_PROTESTADAS]
+        if ajuizadas:
+            alertas.append(
+                f"{len(ajuizadas)} inscrição(ões) já ajuizada(s) (execução fiscal em curso) — "
+                "cruzado com os Dados Abertos da PGFN."
+            )
+        if protestadas:
+            alertas.append(
+                f"{len(protestadas)} inscrição(ões) já protestada(s) em cartório pela PGFN — "
+                "cruzado com os Dados Abertos da PGFN."
+            )
 
     return alertas

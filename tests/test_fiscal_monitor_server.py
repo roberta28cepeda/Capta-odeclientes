@@ -426,6 +426,30 @@ def test_pre_analise_still_generates_pdf_when_infosimples_falha(app, monkeypatch
     assert response.mimetype == "application/pdf"
 
 
+def test_pre_analise_enriquece_divida_ativa_com_dados_abertos(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    devedores_response = {
+        "total_divida": 7359.68,
+        "total_tributario": 0.0,
+        "total_nao_tributario": 7359.68,
+        "naturezas_debitos": [
+            {"descricao": "FGTS", "total": 7359.68, "debitos": [{"inscricao": "FGAL1", "valor_divida": 7359.68}]}
+        ],
+    }
+    with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=SAMPLE_CNPJ_RESPONSE), patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal", return_value={}
+    ), patch("src.fiscal_monitor.server.consultar_lista_devedores", return_value=devedores_response), patch(
+        "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
+    ) as mock_enriquecer:
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_enriquecer.assert_called_once()
+
+
 def test_cnpj_history_returns_404_for_cnpj_of_another_tenant(app, db_path):
     conn = storage.connect(db_path)
     outro_tenant = storage.create_tenant(conn, "Escritório B")
@@ -730,3 +754,80 @@ def test_reforma_tributaria_simulates_with_faturamento(app, monkeypatch):
     )
     assert response.status_code == 200
     assert "Híbrido".encode() in response.data
+
+
+def _xlsx_dados_abertos_bytes(numero_inscricao="FGAL1") -> bytes:
+    import openpyxl
+    from datetime import date
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(
+        [
+            "CPF_CNPJ", "TIPO_PESSOA", "TIPO_DEVEDOR", "NOME_DEVEDOR", "UF_DEVEDOR", "UNIDADE_RESPONSAVEL",
+            "ENTIDADE_RESPONSAVEL", "UNIDADE_INSCRICAO", "NUMERO_INSCRICAO", "TIPO_SITUACAO_INSCRICAO",
+            "SITUACAO_INSCRICAO", "RECEITA_PRINCIPAL", "DATA_INSCRICAO", "INDICADOR_AJUIZADO", "VALOR_CONSOLIDADO",
+        ]
+    )
+    sheet.append(
+        [
+            "08.612.624/0001-71", "Pessoa jurídica", "Principal", "EMPRESA EXEMPLO", "AL", "ALAGOAS", "PGFN",
+            "ALAGOAS", numero_inscricao, "Em cobrança", "INSCRITA", "Contribuições FGTS", date(2025, 1, 8),
+            "NAO", "7359.68",
+        ]
+    )
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_pgfn_dados_abertos_requires_admin(app):
+    response = app.test_client().get("/admin/pgfn-dados-abertos")
+    assert response.status_code == 401
+
+
+def test_pgfn_dados_abertos_renders_form(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get(
+        "/admin/pgfn-dados-abertos", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+
+
+def test_pgfn_dados_abertos_post_importa_xlsx(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().post(
+        "/admin/pgfn-dados-abertos",
+        data={
+            "base_referencia": "2026-03",
+            "arquivo": (io.BytesIO(_xlsx_dados_abertos_bytes()), "arquivo_lai_FGTS_5_202603.xlsx"),
+        },
+        content_type="multipart/form-data",
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+    assert response.status_code == 200
+    assert "1 inscri".encode() in response.data
+
+
+def test_pgfn_dados_abertos_post_rejeita_arquivo_com_colunas_erradas(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    import openpyxl
+
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.append(["CPF/CNPJ", "Nome", "Valor Total"])
+    sheet.append(["11.222.333/0001-44", "Empresa X", "1.000,00"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    response = app.test_client().post(
+        "/admin/pgfn-dados-abertos",
+        data={
+            "base_referencia": "2026-03",
+            "arquivo": (io.BytesIO(buffer.getvalue()), "lista_devedores.xlsx"),
+        },
+        content_type="multipart/form-data",
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+    assert response.status_code == 400
+    assert "Colunas esperadas".encode() in response.data

@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -7,6 +7,7 @@ from src.fiscal_monitor.infosimples import (
     ConsultaDebitosError,
     consultar_cnd_federal,
     consultar_lista_devedores,
+    enriquecer_com_dados_abertos,
     gerar_alertas_fiscais,
     montar_divida_ativa,
     montar_situacao_fiscal,
@@ -162,3 +163,47 @@ def test_gerar_alertas_fiscais_no_findings_when_clean():
     alertas = gerar_alertas_fiscais(situacao, None)
 
     assert alertas == []
+
+
+def test_enriquecer_com_dados_abertos_preenche_debito_quando_bate_inscricao():
+    divida = montar_divida_ativa(SAMPLE_DEVEDORES_RESPONSE["data"][0])
+
+    with patch(
+        "src.fiscal_monitor.storage.buscar_dados_abertos_por_inscricoes",
+        return_value={
+            "111111111111": {
+                "data_inscricao": "2020-05-10",
+                "situacao_inscricao": "AJUIZADA",
+                "indicador_ajuizado": True,
+            }
+        },
+    ):
+        resultado = enriquecer_com_dados_abertos(conn=object(), divida_ativa=divida)
+
+    debito = resultado.naturezas[0].debitos[0]
+    assert debito.data_inscricao == "2020-05-10"
+    assert debito.situacao_inscricao == "AJUIZADA"
+    assert debito.ajuizada is True
+
+
+def test_enriquecer_com_dados_abertos_sem_match_nao_altera_nada():
+    divida = montar_divida_ativa(SAMPLE_DEVEDORES_RESPONSE["data"][0])
+
+    with patch("src.fiscal_monitor.storage.buscar_dados_abertos_por_inscricoes", return_value={}):
+        resultado = enriquecer_com_dados_abertos(conn=object(), divida_ativa=divida)
+
+    assert resultado.naturezas[0].debitos[0].data_inscricao is None
+
+
+def test_enriquecer_com_dados_abertos_retorna_none_para_divida_none():
+    assert enriquecer_com_dados_abertos(conn=object(), divida_ativa=None) is None
+
+
+def test_gerar_alertas_fiscais_flags_ajuizada_e_protestada():
+    divida = montar_divida_ativa(SAMPLE_DEVEDORES_RESPONSE["data"][0])
+    divida.naturezas[0].debitos[0].ajuizada = True
+    divida.naturezas[0].debitos[0].situacao_inscricao = "AJUIZADA"
+
+    alertas = gerar_alertas_fiscais(None, divida)
+
+    assert any("ajuizada" in a for a in alertas)

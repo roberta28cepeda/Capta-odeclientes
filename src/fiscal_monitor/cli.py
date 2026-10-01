@@ -10,6 +10,7 @@ Uso:
     python -m src.fiscal_monitor.cli --import-portfolio --tenant-id 1 --csv carteira.csv
     python -m src.fiscal_monitor.cli --import-snapshot --tenant-id 1 --csv snapshot_ecac.csv
     python -m src.fiscal_monitor.cli --import-faturamento --tenant-id 1 --csv faturamento.csv
+    python -m src.fiscal_monitor.cli --import-pgfn-dados-abertos --csv dados_abertos_fgts.xlsx --base-referencia 2026-03
     python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5
     python -m src.fiscal_monitor.cli --check --tenant-id 1 --pdf --enviar-whatsapp --enviar-email
     python -m src.fiscal_monitor.cli --serve --port 8090
@@ -43,6 +44,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     mode.add_argument(
         "--import-faturamento", action="store_true", help="Importa faturamento mensal de um CSV (pro sublimite do Simples)"
     )
+    mode.add_argument(
+        "--import-pgfn-dados-abertos",
+        action="store_true",
+        help="Importa o arquivo trimestral de Dados Abertos da PGFN (.xlsx/.csv) — data de inscrição e ajuizamento",
+    )
     mode.add_argument("--check", action="store_true", help="Roda o motor de alertas sobre o último snapshot")
     mode.add_argument("--serve", action="store_true", help="Sobe o dashboard web")
     mode.add_argument(
@@ -57,7 +63,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--whatsapp", help="Contato de WhatsApp do escritório, formato internacional")
     parser.add_argument("--email", help="Contato de e-mail do escritório, para --import-tenant")
     parser.add_argument("--plano", help="Plano/tier do tenant, para --import-tenant")
-    parser.add_argument("--csv", help="Caminho do CSV, para --import-portfolio/--import-snapshot")
+    parser.add_argument(
+        "--csv", help="Caminho do CSV/XLSX, para --import-portfolio/--import-snapshot/--import-pgfn-dados-abertos"
+    )
+    parser.add_argument(
+        "--base-referencia",
+        help="Referência 'AAAA-MM' da base, para --import-pgfn-dados-abertos (ex: trimestre publicado pela PGFN)",
+    )
     parser.add_argument(
         "--dias-alerta",
         type=int,
@@ -166,6 +178,24 @@ def main(argv: list[str] | None = None) -> int:
                 count += 1
         conn.close()
         print(f"{count} registro(s) de faturamento importado(s).")
+        return 0
+
+    if args.import_pgfn_dados_abertos:
+        if not _require(args.csv, "--csv") or not _require(args.base_referencia, "--base-referencia"):
+            return 1
+
+        from src.fiscal_monitor.pgfn_dados_abertos import ArquivoDadosAbertosError, importar_arquivo
+
+        conn = storage.connect(args.db_path)
+        try:
+            with open(args.csv, "rb") as f:
+                quantidade = importar_arquivo(conn, f, args.csv, args.base_referencia)
+        except ArquivoDadosAbertosError as exc:
+            print(f"Erro: {exc}", file=sys.stderr)
+            conn.close()
+            return 1
+        conn.close()
+        print(f"{quantidade} inscrição(ões) importada(s)/atualizada(s).")
         return 0
 
     if args.import_snapshot:

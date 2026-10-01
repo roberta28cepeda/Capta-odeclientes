@@ -135,6 +135,11 @@ def render_pre_analise_pdf(
         )
         for natureza in divida_ativa.naturezas:
             story.append(Paragraph(f"• {natureza.descricao}: R$ {formatar_valor_brl(natureza.total)}", BULLET_STYLE))
+            for debito in natureza.debitos:
+                detalhe = f"Inscrição {debito.inscricao}: R$ {formatar_valor_brl(debito.valor_divida)}"
+                if debito.data_inscricao:
+                    detalhe += f" · inscrita em {debito.data_inscricao} · {debito.situacao_inscricao}"
+                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;- {detalhe}", BULLET_STYLE))
 
     story.append(Paragraph("Alertas da pré-análise", ALERT_HEADING_STYLE))
     for alerta in alertas:

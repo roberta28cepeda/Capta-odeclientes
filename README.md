@@ -326,28 +326,52 @@ funciona hoje via CSV importado manualmente, ou no futuro via Serpro
 Integra Contador, ver abaixo). A pré-análise é só a porta de entrada da
 conversa, não substitui a checagem completa.
 
-**Etapas que hoje ficam manuais (fora do sistema)** — pesquisado e
+### Dados Abertos da PGFN: data de inscrição, ajuizamento e protesto
+
+A consulta "Lista de Devedores" acima só traz número da inscrição e
+valor. Pra completar isso sem precisar de login, a PGFN também publica,
+trimestralmente e sem exigir conta, os **Dados Abertos da dívida ativa da
+União e do FGTS** — um arquivo bruto (.xlsx/.csv, baixado em gov.br/pgfn
+→ Acesso à Informação → Dados Abertos, **não** a "Lista de Devedores"),
+com uma linha por inscrição, incluindo data de inscrição e se aquela
+inscrição já foi ajuizada (execução fiscal) ou protestada em cartório
+pela própria PGFN.
+
+Importe o arquivo (CLI `--import-pgfn-dados-abertos --csv arquivo.xlsx
+--base-referencia 2026-03`, ou pela web em `/admin/pgfn-dados-abertos`) e
+toda pré-análise futura cruza automaticamente pelo número da inscrição:
+se bater, o PDF e os alertas passam a mostrar a data de inscrição e,
+quando aplicável, "já ajuizada" ou "já protestada" (ver
+`src/fiscal_monitor/pgfn_dados_abertos.py` e
+`infosimples.enriquecer_com_dados_abertos`). Confirmado contra um arquivo
+real da PGFN — as colunas usadas existem de fato.
+
+**O que isso não resolve:** é importação manual (sem API, repetida a
+cada trimestre quando a PGFN publica base nova) e só cobre ajuizamento/
+protesto **da própria PGFN** — não substitui uma busca geral de processos
+em qualquer tribunal (CNJ) nem protesto por outros credores em qualquer
+cartório (ver abaixo).
+
+**Etapas que ainda ficam manuais (fora do sistema)** — pesquisado e
 descartado automatizar por enquanto, pelos motivos abaixo. Quem for
 verificar isso precisa consultar manualmente:
 
-1. **Data de inscrição de cada débito na dívida ativa** — o produto
-   "Lista de Devedores" da InfoSimples só traz o número da inscrição e o
-   valor, sem a data. Não existe produto separado da InfoSimples pra
-   detalhar isso por número de inscrição (CDA).
-2. **Protesto em cartório** — a InfoSimples tem o produto
-   `ieptb/protestos`, mas ele exige criar uma conta própria em
+1. **Protesto por outros credores (fora da PGFN)** — a InfoSimples tem o
+   produto `ieptb/protestos`, mas ele exige criar uma conta própria em
    `pesquisaprotesto.com.br` e logar com GOV.BR — não dá pra automatizar
-   com só o token da API, então ficou de fora por ora.
-3. **Dívida judicializada (execução fiscal)** — a API pública do CNJ
-   (DataJud) não permite buscar processos por CPF/CNPJ das partes (é
-   proposital, por LGPD — só busca por número de processo, classe,
-   assunto). O portal `jus.br` até tem essa busca, mas exige login
-   pessoal com conta GOV.BR nível ouro (2FA), o que não dá pra
-   automatizar com segurança. As alternativas reais são APIs pagas de
+   com só o token da API, então ficou de fora por ora. (O protesto feito
+   pela própria PGFN já é coberto pelos Dados Abertos acima.)
+2. **Dívida judicializada em qualquer tribunal, além da própria PGFN** —
+   a API pública do CNJ (DataJud) não permite buscar processos por
+   CPF/CNPJ das partes (é proposital, por LGPD — só busca por número de
+   processo, classe, assunto). O portal `jus.br` até tem essa busca, mas
+   exige login pessoal com conta GOV.BR nível ouro (2FA), o que não dá
+   pra automatizar com segurança. As alternativas reais são APIs pagas de
    legal-tech (Judit.io, Escavador, ou o "Motor de Decisão" do Jusbrasil)
    — nenhuma com preço público, todas exigindo contato comercial. Ainda
-   não contratado.
-4. **CAPAG da PGFN (capacidade de pagamento estimada da própria dívida,
+   não contratado. (A execução fiscal da própria PGFN já é coberta pelos
+   Dados Abertos acima.)
+3. **CAPAG da PGFN (capacidade de pagamento estimada da própria dívida,
    nota A/B/C/D)** — existe de verdade (não confundir com a CAPAG do
    Tesouro Nacional, que é só pra municípios/estados), usada no programa
    de transação tributária federal. Mas só é consultável dentro do
@@ -438,6 +462,10 @@ python -m src.fiscal_monitor.cli --import-snapshot --tenant-id 1 --csv snapshot_
 
 # importa faturamento mensal (cnpj,competencia,valor) — usado no sublimite do Simples
 python -m src.fiscal_monitor.cli --import-faturamento --tenant-id 1 --csv faturamento.csv
+
+# importa os Dados Abertos da PGFN (baixado em gov.br/pgfn, não a "Lista de Devedores")
+# completa a pré-análise com data de inscrição e ajuizamento/protesto (ver seção acima)
+python -m src.fiscal_monitor.cli --import-pgfn-dados-abertos --csv dados_abertos_fgts.xlsx --base-referencia 2026-03
 
 # roda o motor de alertas (achados + sublimite do Simples), opcionalmente gerando PDF e enviando por WhatsApp/e-mail
 python -m src.fiscal_monitor.cli --check --tenant-id 1 --dias-alerta 5 --referencia 2026-09

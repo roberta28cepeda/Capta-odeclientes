@@ -99,6 +99,20 @@ CREATE TABLE IF NOT EXISTS certidoes (
     arquivo_conteudo BYTEA NOT NULL,
     criado_em TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pgfn_dividas_abertas (
+    numero_inscricao TEXT PRIMARY KEY,
+    cnpj TEXT NOT NULL,
+    uf TEXT,
+    receita_principal TEXT,
+    situacao_inscricao TEXT NOT NULL,
+    data_inscricao TEXT,
+    indicador_ajuizado BOOLEAN NOT NULL DEFAULT false,
+    valor_consolidado DOUBLE PRECISION,
+    base_referencia TEXT NOT NULL,
+    importado_em TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pgfn_dividas_abertas_cnpj_idx ON pgfn_dividas_abertas(cnpj);
 """
 
 _CONNECTION_ENV_VARS = ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_URL_NON_POOLING")
@@ -514,3 +528,65 @@ def _row_to_certidao(row) -> Certidao:
         emitida_em=row["emitida_em"], valida_ate=row["valida_ate"], arquivo_nome=row["arquivo_nome"],
         criado_em=row["criado_em"],
     )
+
+
+def upsert_dividas_abertas_pgfn(conn, registros: list[dict], base_referencia: str) -> int:
+    agora = datetime.now(timezone.utc).isoformat()
+    linhas = [
+        (
+            registro["numero_inscricao"],
+            registro["cnpj"],
+            registro["uf"],
+            registro["receita_principal"],
+            registro["situacao_inscricao"],
+            registro["data_inscricao"],
+            bool(registro["indicador_ajuizado"]),
+            registro["valor_consolidado"],
+            base_referencia,
+            agora,
+        )
+        for registro in registros
+    ]
+    with conn.cursor() as cur:
+        psycopg2.extras.execute_values(
+            cur,
+            """
+            INSERT INTO pgfn_dividas_abertas
+                (numero_inscricao, cnpj, uf, receita_principal, situacao_inscricao,
+                 data_inscricao, indicador_ajuizado, valor_consolidado, base_referencia, importado_em)
+            VALUES %s
+            ON CONFLICT (numero_inscricao) DO UPDATE SET
+                cnpj = excluded.cnpj,
+                uf = excluded.uf,
+                receita_principal = excluded.receita_principal,
+                situacao_inscricao = excluded.situacao_inscricao,
+                data_inscricao = excluded.data_inscricao,
+                indicador_ajuizado = excluded.indicador_ajuizado,
+                valor_consolidado = excluded.valor_consolidado,
+                base_referencia = excluded.base_referencia,
+                importado_em = excluded.importado_em
+            """,
+            linhas,
+        )
+    conn.commit()
+    return len(registros)
+
+
+def buscar_dados_abertos_por_inscricoes(conn, numeros: list[str]) -> dict[str, dict]:
+    if not numeros:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT numero_inscricao, data_inscricao, situacao_inscricao, indicador_ajuizado "
+            "FROM pgfn_dividas_abertas WHERE numero_inscricao = ANY(%s)",
+            (numeros,),
+        )
+        rows = cur.fetchall()
+    return {
+        row["numero_inscricao"]: {
+            "data_inscricao": row["data_inscricao"],
+            "situacao_inscricao": row["situacao_inscricao"],
+            "indicador_ajuizado": row["indicador_ajuizado"],
+        }
+        for row in rows
+    }

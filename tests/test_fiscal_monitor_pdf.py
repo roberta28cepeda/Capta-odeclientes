@@ -1,7 +1,7 @@
 import os
 import tempfile
 
-from src.fiscal_monitor.infosimples import DividaAtivaPgfn, NaturezaDebito, SituacaoFiscalPgfn
+from src.fiscal_monitor.infosimples import DebitoInscricao, DividaAtivaPgfn, NaturezaDebito, SituacaoFiscalPgfn
 from src.fiscal_monitor.pdf import render_pre_analise_pdf, render_portfolio_report
 from src.fiscal_monitor.preanalise import PreAnalise
 from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
@@ -57,6 +57,38 @@ def test_render_pre_analise_pdf_creates_nonempty_file():
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "pre_analise.pdf")
         render_pre_analise_pdf(PRE_ANALISE, ["Nenhum alerta cadastral identificado."], path, escritorio_nome="Escritório X")
+
+        assert os.path.exists(path)
+        assert os.path.getsize(path) > 0
+        with open(path, "rb") as f:
+            assert f.read(4) == b"%PDF"
+
+
+def test_render_pre_analise_pdf_includes_debitos_enriquecidos_com_dados_abertos():
+    divida_ativa = DividaAtivaPgfn(
+        total_divida=7359.68,
+        total_tributario=0.0,
+        total_nao_tributario=7359.68,
+        naturezas=[
+            NaturezaDebito(
+                descricao="FGTS",
+                total=7359.68,
+                debitos=[
+                    DebitoInscricao(
+                        inscricao="FGAL202500237",
+                        valor_divida=7359.68,
+                        data_inscricao="2025-01-08",
+                        situacao_inscricao="AJUIZADA",
+                        ajuizada=True,
+                    )
+                ],
+            )
+        ],
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "pre_analise_enriquecida.pdf")
+        render_pre_analise_pdf(PRE_ANALISE, ["Inscrição já ajuizada."], path, divida_ativa=divida_ativa)
 
         assert os.path.exists(path)
         assert os.path.getsize(path) > 0
