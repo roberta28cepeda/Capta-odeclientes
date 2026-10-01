@@ -292,13 +292,22 @@ def enviar_resumo_whatsapp_equipe(
     )
 
 
-def buscar_emails_pendentes(conn, api_key: str) -> dict:
+LIMITE_BUSCA_EMAIL_POR_EXECUCAO = 50
+"""Teto de leads processados por chamada de `buscar_emails_pendentes` — sem
+isso, uma carteira grande (ex: dezenas de milhares de leads importados de
+uma planilha da PGFN) faria o cron estourar o tempo máximo da função
+serverless antes mesmo de chegar no envio de e-mail. Processa em ordem de
+importação (mais antigos primeiro) e vai avançando um pouco a cada
+execução diária até zerar o backlog."""
+
+
+def buscar_emails_pendentes(conn, api_key: str, limite: int = LIMITE_BUSCA_EMAIL_POR_EXECUCAO) -> dict:
     """Busca o e-mail de cada lead ativo (de qualquer tese) que ainda não
     tem um cadastrado — roda automaticamente no cron diário, antes do
     envio, já que o usuário não opera por CLI em produção. Erro num lead
     (site fora do ar, cota esgotada etc.) não trava a busca dos demais.
     """
-    leads = storage.leads_sem_email(conn)
+    leads = storage.leads_sem_email(conn)[:limite]
     encontrados = 0
     erros = []
     for lead in leads:

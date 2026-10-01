@@ -196,6 +196,19 @@ def test_buscar_emails_pendentes_records_error_without_stopping_others():
     assert len(resultado["erros"]) == 1
 
 
+def test_buscar_emails_pendentes_respects_limite_por_execucao():
+    conn = _conn()
+    for i in range(5):
+        storage.create_lead(conn, f"{i:02d}.222.333/0001-44", TESE, razao_social=f"Empresa {i}")
+
+    with patch("src.campaigns.engine.buscar_email_por_empresa", return_value="achado@empresa.com.br") as mock_busca:
+        resultado = engine.buscar_emails_pendentes(conn, "API_KEY", limite=2)
+
+    assert mock_busca.call_count == 2
+    assert resultado["leads_verificados"] == 2
+    assert resultado["encontrados"] == 2
+
+
 def test_buscar_emails_pendentes_handles_no_email_found():
     conn = _conn()
     storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
