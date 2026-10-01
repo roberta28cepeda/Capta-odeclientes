@@ -221,21 +221,35 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
     },
     "industria_tributaria_geral": {
         TIPO_INICIAL: {
-            "assunto": "[RASCUNHO] {{RAZAO_SOCIAL}} — débito tributário federal",
+            "assunto": "{{RAZAO_SOCIAL}} — dívida com a União pode ter desconto e parcelamento",
             "tag": "DÍVIDA ATIVA DA UNIÃO",
-            "headline": "[AJUSTAR: título da tese de dívida tributária geral (Demais débitos - Tributários) — ainda não recebi o ângulo/pitch.]",
+            "headline": "Essa dívida trava sua certidão negativa — mas também pode ter desconto pra ser quitada.",
             "paragrafo1": (
-                "[AJUSTAR] Texto sobre o débito tributário federal da {{RAZAO_SOCIAL}} — preciso do "
-                "ângulo/pitch pra escrever de verdade. Atenção: essa lista é de \"Demais débitos - "
-                "Tributários\", não Simples Nacional — são empresas de porte maior, não use a copy da "
-                "tese industria_ibs_cbs (que fala de Simples Nacional) aqui."
+                "A <strong>{{RAZAO_SOCIAL}}</strong> está na Lista de Devedores da União, com um débito "
+                "tributário federal de <strong style=\"color:#0c4a4a;\">R$ {{VALOR_DIVIDA}}</strong>. "
+                "Enquanto não resolvido, sua empresa fica sem Certidão Negativa de Débitos — o que trava "
+                "renovação de linha de crédito, participação em licitação e negociação com fornecedores e "
+                "clientes maiores."
             ),
-            "paragrafo2": "[AJUSTAR] Segundo parágrafo.",
-            "checklist": list(_CHECKLIST_FOLLOWUP_PADRAO),
-            "italico": "[AJUSTAR] Frase de urgência.",
-            "cta_texto": "QUERO RESOLVER ISSO",
+            "paragrafo2": (
+                "A PGFN tem programas de <strong style=\"color:#0c4a4a;\">transação tributária</strong> que "
+                "permitem negociar desconto em juros e multa, além de parcelamento estendido — mas as "
+                "condições de cada edital mudam com o tempo, e o valor da dívida só cresce (SELIC) enquanto "
+                "isso."
+            ),
+            "checklist": [
+                "Diagnóstico gratuito da dívida e das opções de negociação",
+                "Simulação de desconto e parcelamento via transação tributária",
+                "Emissão de certidão negativa assim que regularizado",
+                "Acompanhamento completo, sem você precisar entender de PGFN",
+            ],
+            "italico": (
+                "Cada mês parado é mais juro (SELIC) em cima do valor — e a condição de negociação "
+                "disponível hoje pode não estar disponível amanhã."
+            ),
+            "cta_texto": "QUERO NEGOCIAR ESSA DÍVIDA",
             "link_cta": _WHATSAPP_LINK,
-            "rodape_nota": _NOTAS_RODAPE_PADRAO,
+            "rodape_nota": "quanto mais cedo resolvida, menor o custo final em juros e multa.",
         },
         TIPOS_FOLLOWUP[0]: _followup_rascunho("DÍVIDA ATIVA DA UNIÃO"),
     },
