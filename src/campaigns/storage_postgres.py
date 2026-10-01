@@ -117,6 +117,16 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
             # Follow-up virou 1x (5 dias depois), não mais 3x (3 em 3 dias) —
             # remove os templates dos follow-ups que deixaram de existir.
             cur.execute("DELETE FROM campanha_templates WHERE tipo IN ('followup_2', 'followup_3')")
+            # O e-mail inicial da industria_tributaria_geral ficou de rascunho
+            # ([AJUSTAR]) por um tempo — assim que o texto real foi escrito,
+            # o "ON CONFLICT DO NOTHING" do seed abaixo não substituiria
+            # sozinho o que já tinha sido inserido. Só apaga se ainda for o
+            # rascunho (nunca mexe numa edição real feita depois, seja essa
+            # ou pela própria Leactis via /admin/campanhas/templates).
+            cur.execute(
+                "DELETE FROM campanha_templates "
+                "WHERE tese = 'industria_tributaria_geral' AND tipo = 'inicial' AND headline LIKE '[AJUSTAR%'"
+            )
 
             for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
                 for tipo, campos in templates_do_tese.items():
