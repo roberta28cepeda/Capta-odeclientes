@@ -70,6 +70,53 @@ def test_importar_leads_requires_tese(app, monkeypatch):
     assert response.status_code == 400
 
 
+def test_aparar_leads_requires_admin(app):
+    response = app.test_client().get("/admin/campanhas/leads/aparar")
+    assert response.status_code == 401
+
+
+def test_aparar_leads_form_renders_with_admin_auth(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get(
+        "/admin/campanhas/leads/aparar", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+
+
+def test_aparar_leads_post_keeps_highest_valor_divida(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.bulk_create_leads(
+        conn,
+        TESE,
+        [
+            {"cnpj": "11.111.111/0001-11", "razao_social": "Baixa", "email": None, "valor_divida": 100.0},
+            {"cnpj": "22.222.222/0001-22", "razao_social": "Alta", "email": None, "valor_divida": 9000.0},
+        ],
+    )
+
+    response = app.test_client().post(
+        "/admin/campanhas/leads/aparar",
+        data={"tese": TESE, "manter": "1"},
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+
+    assert response.status_code == 200
+    assert b"1 lead(s) apagado(s)" in response.data
+    restantes = {lead.cnpj for lead in campaigns_storage.list_leads(conn, tese=TESE)}
+    assert restantes == {"22.222.222/0001-22"}
+
+
+def test_aparar_leads_requires_valid_manter(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().post(
+        "/admin/campanhas/leads/aparar",
+        data={"tese": TESE, "manter": "abc"},
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+    assert response.status_code == 400
+
+
 def test_listar_leads_shows_imported_lead(app, monkeypatch, campaigns_db_path):
     monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
     conn = campaigns_storage.connect(campaigns_db_path)

@@ -71,6 +71,72 @@ def test_bulk_create_leads_handles_empty_list():
     assert storage.bulk_create_leads(conn, TESE, []) == 0
 
 
+def test_aparar_leads_por_tese_keeps_highest_valor_divida():
+    conn = _conn()
+    storage.bulk_create_leads(
+        conn,
+        TESE,
+        [
+            {"cnpj": "11.111.111/0001-11", "razao_social": "Baixa", "email": None, "valor_divida": 100.0},
+            {"cnpj": "22.222.222/0001-22", "razao_social": "Alta", "email": None, "valor_divida": 9000.0},
+            {"cnpj": "33.333.333/0001-33", "razao_social": "Media", "email": None, "valor_divida": 500.0},
+        ],
+    )
+
+    apagados = storage.aparar_leads_por_tese(conn, TESE, 2)
+
+    assert apagados == 1
+    restantes = {lead.cnpj for lead in storage.list_leads(conn, tese=TESE)}
+    assert restantes == {"22.222.222/0001-22", "33.333.333/0001-33"}
+
+
+def test_aparar_leads_por_tese_treats_null_valor_divida_as_lowest():
+    conn = _conn()
+    storage.bulk_create_leads(
+        conn,
+        TESE,
+        [
+            {"cnpj": "11.111.111/0001-11", "razao_social": "Sem valor", "email": None, "valor_divida": None},
+            {"cnpj": "22.222.222/0001-22", "razao_social": "Com valor", "email": None, "valor_divida": 50.0},
+        ],
+    )
+
+    apagados = storage.aparar_leads_por_tese(conn, TESE, 1)
+
+    assert apagados == 1
+    restante = storage.list_leads(conn, tese=TESE)
+    assert restante[0].cnpj == "22.222.222/0001-22"
+
+
+def test_aparar_leads_por_tese_never_removes_lead_with_envio():
+    conn = _conn()
+    lead_baixo = storage.create_lead(conn, "11.111.111/0001-11", TESE, email="x@exemplo.com")
+    storage.bulk_create_leads(
+        conn, TESE, [{"cnpj": "11.111.111/0001-11", "razao_social": None, "email": None, "valor_divida": 10.0}]
+    )
+    storage.bulk_create_leads(
+        conn, TESE, [{"cnpj": "22.222.222/0001-22", "razao_social": None, "email": None, "valor_divida": 9000.0}]
+    )
+    storage.create_envio(conn, lead_baixo.id, TIPO_INICIAL)
+
+    apagados = storage.aparar_leads_por_tese(conn, TESE, 0)
+
+    assert apagados == 1  # só apaga o de maior valor, sem envio; o que já foi contatado fica
+    restantes = {lead.cnpj for lead in storage.list_leads(conn, tese=TESE)}
+    assert restantes == {"11.111.111/0001-11"}
+
+
+def test_aparar_leads_por_tese_only_affects_given_tese():
+    conn = _conn()
+    storage.create_lead(conn, "11.111.111/0001-11", TESE, valor_divida=10.0)
+    storage.create_lead(conn, "22.222.222/0001-22", OUTRA_TESE, valor_divida=10.0)
+
+    storage.aparar_leads_por_tese(conn, TESE, 0)
+
+    assert storage.list_leads(conn, tese=TESE) == []
+    assert len(storage.list_leads(conn, tese=OUTRA_TESE)) == 1
+
+
 def test_create_lead_stores_valor_divida():
     conn = _conn()
     lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, valor_divida=1234.56)

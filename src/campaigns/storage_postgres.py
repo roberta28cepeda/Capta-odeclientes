@@ -291,6 +291,28 @@ def set_lead_whatsapp_contatado(conn, lead_id: int) -> None:
     conn.commit()
 
 
+def aparar_leads_por_tese(conn, tese: str, manter: int) -> int:
+    """Mantém só os `manter` leads de maior valor_divida pra uma tese,
+    apagando o resto — nunca remove um lead que já recebeu algum envio
+    (preserva contato em andamento). Usado pra podar listas importadas
+    grandes demais (ex: planilha bruta da PGFN) pro ritmo real de busca
+    de e-mail/telefone e envio diário.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id FROM campanha_leads WHERE tese = %s "
+            "AND id NOT IN (SELECT DISTINCT lead_id FROM campanha_envios) "
+            "ORDER BY valor_divida DESC NULLS LAST, id "
+            "OFFSET %s",
+            (tese, manter),
+        )
+        ids_para_apagar = [row["id"] for row in cur.fetchall()]
+        if ids_para_apagar:
+            cur.execute("DELETE FROM campanha_leads WHERE id = ANY(%s)", (ids_para_apagar,))
+    conn.commit()
+    return len(ids_para_apagar)
+
+
 def _row_to_lead(row) -> Lead:
     return Lead(
         id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],

@@ -47,7 +47,8 @@ _LEADS_TEMPLATE = """
 <p><a href="/admin/campanhas/leads/importar">+ Importar leads (CSV)</a> ·
    <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a> ·
    <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a> ·
-   <a href="/admin/campanhas/rodar-agora">Rodar campanha agora</a></p>
+   <a href="/admin/campanhas/rodar-agora">Rodar campanha agora</a> ·
+   <a href="/admin/campanhas/leads/aparar">Podar lista de leads</a></p>
 <p>Teses:
 {% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}" style="margin-right:10px;{% if t == tese %}font-weight:bold;{% endif %}">{{ t }}</a>{% endfor %}
 <a href="/admin/campanhas/leads">(todas)</a>
@@ -84,6 +85,25 @@ _IMPORTAR_LEADS_TEMPLATE = """
   <button type="submit">Importar</button>
 </form>
 """
+
+_APARAR_LEADS_TEMPLATE = page("Podar lista de leads", """
+<p><a href="/admin/campanhas/leads">&larr; voltar</a></p>
+<h1>Podar lista de leads</h1>
+<p>Mantém só os leads de maior valor de dívida pra uma tese, apagando o resto —
+nunca apaga um lead que já recebeu algum e-mail (contato em andamento fica intacto).
+Use isso quando uma planilha importada for grande demais pro ritmo real de busca de
+e-mail/telefone e envio diário.</p>
+{% if resultado %}<div class="success">{{ resultado }}</div>{% endif %}
+<form method="post" class="card">
+  <label>Tese<br>
+    <select name="tese" required>
+      {% for t in teses %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Manter quantos leads (os de maior valor de dívida)<input type="number" name="manter" value="500" min="1" required></label>
+  <button type="submit">Podar agora</button>
+</form>
+""")
 
 _TEMPLATES_TEMPLATE = """
 <!doctype html>
@@ -247,6 +267,34 @@ def importar_leads():
     count = storage.bulk_create_leads(conn, tese, leads_para_criar) if leads_para_criar else 0
     return render_template_string(
         _IMPORTAR_LEADS_TEMPLATE, resultado=f"{count} lead(s) importado(s) na tese '{tese}'.", teses=_teses_conhecidas(conn)
+    )
+
+
+@bp.route("/admin/campanhas/leads/aparar", methods=["GET", "POST"])
+def aparar_leads():
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    conn = _connect()
+    if request.method == "GET":
+        return render_template_string(_APARAR_LEADS_TEMPLATE, teses=_teses_conhecidas(conn))
+
+    tese = (request.form.get("tese") or "").strip()
+    manter_raw = (request.form.get("manter") or "").strip()
+    if not tese or not manter_raw.isdigit():
+        return (
+            render_template_string(
+                _APARAR_LEADS_TEMPLATE, resultado="Informe a tese e quantos leads manter (número).",
+                teses=_teses_conhecidas(conn),
+            ),
+            400,
+        )
+
+    apagados = storage.aparar_leads_por_tese(conn, tese, int(manter_raw))
+    return render_template_string(
+        _APARAR_LEADS_TEMPLATE,
+        resultado=f"{apagados} lead(s) apagado(s) da tese '{tese}' — ficaram os {manter_raw} de maior valor de dívida.",
+        teses=_teses_conhecidas(conn),
     )
 
 

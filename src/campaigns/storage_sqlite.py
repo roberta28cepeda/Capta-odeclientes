@@ -220,6 +220,28 @@ def set_lead_whatsapp_contatado(conn: sqlite3.Connection, lead_id: int) -> None:
     conn.commit()
 
 
+def aparar_leads_por_tese(conn: sqlite3.Connection, tese: str, manter: int) -> int:
+    """Mantém só os `manter` leads de maior valor_divida pra uma tese,
+    apagando o resto — nunca remove um lead que já recebeu algum envio
+    (preserva contato em andamento). Usado pra podar listas importadas
+    grandes demais (ex: planilha bruta da PGFN) pro ritmo real de busca
+    de e-mail/telefone e envio diário.
+    """
+    rows = conn.execute(
+        "SELECT id, valor_divida FROM campanha_leads WHERE tese = ? "
+        "AND id NOT IN (SELECT DISTINCT lead_id FROM campanha_envios)",
+        (tese,),
+    ).fetchall()
+    ordenados = sorted(rows, key=lambda r: r["valor_divida"] if r["valor_divida"] is not None else -1.0, reverse=True)
+    ids_para_apagar = [r["id"] for r in ordenados[manter:]]
+    for i in range(0, len(ids_para_apagar), 500):
+        lote = ids_para_apagar[i : i + 500]
+        placeholders = ",".join("?" for _ in lote)
+        conn.execute(f"DELETE FROM campanha_leads WHERE id IN ({placeholders})", lote)
+    conn.commit()
+    return len(ids_para_apagar)
+
+
 def _row_to_lead(row: sqlite3.Row) -> Lead:
     return Lead(
         id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],
