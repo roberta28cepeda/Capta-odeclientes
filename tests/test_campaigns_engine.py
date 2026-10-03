@@ -356,13 +356,35 @@ def test_montar_link_whatsapp_uses_dedicated_message_for_simples_ibs_cbs():
 
 def test_montar_link_whatsapp_falls_back_to_divida_message_for_unmapped_tese():
     lead = Lead(
-        id=1, cnpj="11.222.333/0001-44", tese="mei_regularizacao", razao_social="Empresa X", email=None,
+        id=1, cnpj="11.222.333/0001-44", tese="contadores_tributaria", razao_social="Empresa X", email=None,
         status="ativo", criado_em="", valor_divida=500.0, telefone="11912345678",
     )
 
     link = engine.montar_link_whatsapp(lead)
 
     assert "pend" in link.lower()  # mensagem padrão de dívida
+
+
+def test_montar_link_whatsapp_uses_dedicated_message_for_mei_regularizacao():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese="mei_regularizacao", razao_social="Empresa X", email=None,
+        status="ativo", criado_em="", telefone="11912345678",
+    )
+
+    link = engine.montar_link_whatsapp(lead)
+
+    assert "MEI" in link or "CNPJ cancelado" in link
+
+
+def test_montar_link_whatsapp_uses_dedicated_message_for_industria_tributaria_geral():
+    lead = Lead(
+        id=1, cnpj="11.222.333/0001-44", tese="industria_tributaria_geral", razao_social="Empresa X", email=None,
+        status="ativo", criado_em="", valor_divida=1000.0, telefone="11912345678",
+    )
+
+    link = engine.montar_link_whatsapp(lead)
+
+    assert "transa" in link.lower() or "tributária" in link.lower()
 
 
 def test_montar_resumo_whatsapp_lists_leads_with_links():

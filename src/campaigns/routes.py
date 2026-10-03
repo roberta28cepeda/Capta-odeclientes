@@ -21,6 +21,7 @@ from src.campaigns import brevo_client, engine, storage, tracking
 from src.campaigns.brevo_client import BrevoSyncError
 from src.campaigns.models import TIPOS_ENVIO
 from src.campaigns.templates import DEFAULT_TEMPLATES
+from src.common.web_styles import page
 from src.common.webauth import cron_authorized, require_admin
 
 bp = Blueprint("campaigns", __name__)
@@ -45,7 +46,8 @@ _LEADS_TEMPLATE = """
 <h1>Leads da campanha{% if tese %} — {{ tese }}{% endif %}</h1>
 <p><a href="/admin/campanhas/leads/importar">+ Importar leads (CSV)</a> ·
    <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a> ·
-   <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a></p>
+   <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a> ·
+   <a href="/admin/campanhas/rodar-agora">Rodar campanha agora</a></p>
 <p>Teses:
 {% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}" style="margin-right:10px;{% if t == tese %}font-weight:bold;{% endif %}">{{ t }}</a>{% endfor %}
 <a href="/admin/campanhas/leads">(todas)</a>
@@ -135,6 +137,42 @@ contato duplicado quando várias pessoas usam o mesmo número).</p>
 <p>Nenhum lead pendente de contato via WhatsApp no momento (sem telefone achado ainda, ou todo mundo já foi contatado).</p>
 {% endif %}
 """
+
+_RODAR_AGORA_TEMPLATE = page("Rodar campanha agora", """
+<p><a href="/admin/campanhas/leads">&larr; voltar pros leads</a></p>
+<h1>Rodar campanha agora</h1>
+<p>Dispara manualmente o mesmo processo do cron diário (busca de e-mail/telefone pendente,
+envio de e-mails do dia, resumo de WhatsApp pra equipe, relatório semanal às segundas) —
+use isso pra testar, ou se o agendamento automático do Vercel atrasar ou falhar.</p>
+<form method="post">
+  <button type="submit">Rodar agora</button>
+</form>
+{% if resultado %}
+  {% if resultado.error %}
+  <div class="alert">{{ resultado.error }}</div>
+  {% else %}
+  <h2>Resultado</h2>
+  <table>
+    <tr><td>Leads verificados hoje</td><td>{{ resultado.leads_verificados }}</td></tr>
+    <tr><td>E-mails enviados</td><td>{{ resultado.enviados }}</td></tr>
+    <tr><td>Erros no envio</td><td>{{ resultado.erros|length }}</td></tr>
+    <tr><td>Busca de e-mail (Exa)</td><td>{{ resultado.busca_email.encontrados if resultado.busca_email else "não configurado (sem EXA_API_KEY)" }} achado(s) de {{ resultado.busca_email.leads_verificados if resultado.busca_email else 0 }} verificado(s)</td></tr>
+    <tr><td>Busca de telefone (ReceitaWS)</td><td>{{ resultado.busca_telefone.encontrados }} achado(s) de {{ resultado.busca_telefone.leads_verificados }} verificado(s)</td></tr>
+    <tr><td>Resumo de WhatsApp enviado pra equipe</td><td>{{ "sim" if resultado.resumo_whatsapp_enviado else "não" }}</td></tr>
+    <tr><td>Relatório semanal enviado</td><td>{{ "sim" if resultado.relatorio_semanal_enviado else "não (só roda às segundas)" }}</td></tr>
+  </table>
+  {% if resultado.erros %}
+  <h2>Detalhe dos erros</h2>
+  <table>
+    <tr><th>CNPJ</th><th>Tese</th><th>Erro</th></tr>
+    {% for erro in resultado.erros %}
+    <tr><td>{{ erro.cnpj }}</td><td>{{ erro.tese }}</td><td>{{ erro.erro }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+  {% endif %}
+{% endif %}
+""")
 
 
 @bp.get("/admin/campanhas/whatsapp")
@@ -295,17 +333,20 @@ def track_click(token: str):
     return redirect(destino)
 
 
-@bp.route("/cron/campanhas/rodar", methods=["GET", "POST"])
-def cron_rodar():
-    if not cron_authorized():
-        return jsonify({"error": "não autorizado — CRON_SECRET ausente ou incorreto"}), 401
-
+def _executar_campanha_diaria() -> dict:
+    """Corpo de verdade do envio diário da campanha — chamado tanto pelo
+    cron (`/cron/campanhas/rodar`, autenticado por `CRON_SECRET`) quanto
+    pelo botão manual de admin (`/admin/campanhas/rodar-agora`), já que o
+    cron do Vercel depende de agendamento externo que não dá pra verificar
+    nem forçar por aqui — o botão manual garante que o envio sempre pode
+    ser disparado na hora, autenticado por login de admin.
+    """
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_port = os.environ.get("SMTP_PORT")
     smtp_username = os.environ.get("SMTP_USERNAME")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     if not all([smtp_host, smtp_port, smtp_username, smtp_password]):
-        return jsonify({"error": "SMTP_HOST, SMTP_PORT, SMTP_USERNAME e SMTP_PASSWORD precisam estar configurados"}), 500
+        return {"error": "SMTP_HOST, SMTP_PORT, SMTP_USERNAME e SMTP_PASSWORD precisam estar configurados"}
     smtp_from = os.environ.get("SMTP_FROM")
 
     base_url = os.environ.get("PUBLIC_BASE_URL") or request.host_url.rstrip("/")
@@ -337,4 +378,31 @@ def cron_rodar():
         relatorio_enviado = True
 
     resultado["relatorio_semanal_enviado"] = relatorio_enviado
-    return jsonify(resultado)
+    return resultado
+
+
+@bp.route("/cron/campanhas/rodar", methods=["GET", "POST"])
+def cron_rodar():
+    if not cron_authorized():
+        return jsonify({"error": "não autorizado — CRON_SECRET ausente ou incorreto"}), 401
+
+    resultado = _executar_campanha_diaria()
+    return jsonify(resultado), (500 if "error" in resultado else 200)
+
+
+@bp.get("/admin/campanhas/rodar-agora")
+def rodar_agora_form():
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    return render_template_string(_RODAR_AGORA_TEMPLATE)
+
+
+@bp.post("/admin/campanhas/rodar-agora")
+def rodar_agora():
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+
+    resultado = _executar_campanha_diaria()
+    return render_template_string(_RODAR_AGORA_TEMPLATE, resultado=resultado)

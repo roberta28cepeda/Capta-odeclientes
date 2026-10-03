@@ -231,7 +231,9 @@ _MENSAGENS_WHATSAPP_POR_TESE: dict[str, str] = {
         "🔓 Funciona assim: você indica o cliente, nosso time cuida de todo o atendimento e da emissão, "
         "e seu escritório recebe por cada certificado emitido.\n\n"
         "A parceria está sendo ampliada a partir do nosso relacionamento com a Fenacon e a Safeweb.\n\n"
-        "Quer que eu te mostre como seu escritório pode participar?"
+        "📅 Separamos um horário rápido pra te mostrar como funciona: [DIA] às [HORÁRIO 1] ou [DIA] às "
+        "[HORÁRIO 2].\n\n"
+        "Qual dos dois horários funciona melhor pra você?"
     ),
     "simples_ibs_cbs": (
         "⚠️ 2027 está chegando… e identificamos uma pendência relacionada ao Simples Nacional da "
@@ -242,6 +244,29 @@ _MENSAGENS_WHATSAPP_POR_TESE: dict[str, str] = {
         "para a última hora.\n\n"
         "📅 Nosso time tem disponibilidade [DIA] às [HORÁRIO 1] ou [DIA] às [HORÁRIO 2] para analisar o "
         "caso da {{EMPRESA}}.\n\n"
+        "Qual horário funciona melhor pra você?"
+    ),
+    "industria_tributaria_geral": (
+        "⚠️ R$ {{VALOR}}… esse é o valor aproximado do débito tributário federal que identificamos "
+        "vinculado à {{EMPRESA}}, na Lista de Devedores da União.\n\n"
+        "Enquanto isso não for resolvido, a {{EMPRESA}} fica sem Certidão Negativa de Débitos — o que "
+        "trava renovação de crédito, licitação e negociação com fornecedores e clientes maiores. E o "
+        "valor só cresce com juros (SELIC) enquanto a dívida continuar em aberto.\n\n"
+        "Existe a possibilidade de negociar desconto em juros e multa, além de parcelamento estendido, "
+        "via transação tributária federal — mas as condições de cada edital mudam com o tempo.\n\n"
+        "📅 Nosso time tem disponibilidade [DIA] às [HORÁRIO 1] ou [DIA] às [HORÁRIO 2] para analisar o "
+        "caso da {{EMPRESA}}.\n\n"
+        "Qual horário funciona melhor pra você?"
+    ),
+    "mei_regularizacao": (
+        "⚠️ Identificamos uma pendência no seu MEI ({{EMPRESA}}) — DAS em atraso e/ou declaração anual "
+        "não entregue.\n\n"
+        "Enquanto isso não for resolvido, você não consegue emitir nota, abrir conta PJ nem fechar "
+        "contrato com empresas maiores — e corre risco real de ter o CNPJ cancelado de ofício pela "
+        "Receita Federal. Cada mês em atraso também é um mês a menos contando pra sua aposentadoria pelo "
+        "INSS.\n\n"
+        "📅 Separamos um horário rápido pra resolver isso com você: [DIA] às [HORÁRIO 1] ou [DIA] às "
+        "[HORÁRIO 2].\n\n"
         "Qual horário funciona melhor pra você?"
     ),
 }

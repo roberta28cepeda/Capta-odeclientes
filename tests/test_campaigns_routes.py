@@ -281,6 +281,55 @@ def test_cron_campanhas_skips_whatsapp_digest_without_env_var(app, monkeypatch, 
     assert data["resumo_whatsapp_enviado"] is False
 
 
+def test_rodar_agora_requires_admin(app):
+    response = app.test_client().get("/admin/campanhas/rodar-agora")
+    assert response.status_code == 401
+
+
+def test_rodar_agora_form_renders_with_admin_auth(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get(
+        "/admin/campanhas/rodar-agora", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+
+
+def test_rodar_agora_post_requires_admin(app):
+    response = app.test_client().post("/admin/campanhas/rodar-agora")
+    assert response.status_code == 401
+
+
+def test_rodar_agora_post_shows_erro_without_smtp_config(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().post(
+        "/admin/campanhas/rodar-agora", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+    assert "SMTP_HOST".encode() in response.data
+
+
+def test_rodar_agora_post_runs_and_sends_pending_leads(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+
+    with patch("src.campaigns.engine.send_email_html") as mock_send, patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None
+    ):
+        response = app.test_client().post(
+            "/admin/campanhas/rodar-agora", headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_send.assert_called_once()
+    assert "E-mails enviados".encode() in response.data
+
+
 def test_cartao_whatsapp_requires_admin(app):
     response = app.test_client().get("/admin/campanhas/whatsapp")
     assert response.status_code == 401
