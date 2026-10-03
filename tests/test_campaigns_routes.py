@@ -405,3 +405,24 @@ def test_track_open_skips_brevo_sync_without_env_vars(app, campaigns_db_path):
         app.test_client().get(f"/track/open/{envio.tracking_token}.gif")
 
     mock_brevo.assert_not_called()
+
+
+def test_status_sistema_requires_admin(app):
+    response = app.test_client().get("/admin/status")
+    assert response.status_code == 401
+
+
+def test_status_sistema_shows_integrations_and_data_state(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.create_lead(conn, "11.222.333/0001-44", "mei_regularizacao", email="x@exemplo.com")
+
+    response = app.test_client().get("/admin/status", headers=_basic_auth_header("admin", "senha-secreta"))
+
+    assert response.status_code == 200
+    assert "INFOSIMPLES_API_TOKEN".encode() in response.data
+    assert "✅ configurado".encode() in response.data
+    assert "mei_regularizacao".encode() in response.data
+    assert "texto real".encode() in response.data

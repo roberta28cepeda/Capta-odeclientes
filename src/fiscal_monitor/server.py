@@ -47,6 +47,8 @@ from src.fiscal_monitor.reforma import FATURAMENTO_MAXIMO, FATURAMENTO_MINIMO, s
 from src.fiscal_monitor.risco import calcular_score_risco, certidao_status, orgaos_exigidos
 from werkzeug.security import generate_password_hash
 
+from src.campaigns import storage as campaigns_storage
+
 _TENANTS_TEMPLATE = page("Monitoramento Fiscal", """
 <h1>Escritórios monitorados</h1>
 <nav class="nav">
@@ -56,6 +58,7 @@ _TENANTS_TEMPLATE = page("Monitoramento Fiscal", """
   <a href="/admin/usuarios">Usuários da equipe</a>
   <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
   <a href="/admin/pgfn-dados-abertos">Dados Abertos da PGFN</a>
+  <a href="/admin/status">Status do sistema</a>
 </nav>
 <table>
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
@@ -303,6 +306,44 @@ inscrição que também aparecer numa consulta futura.</p>
   <button type="submit">Importar</button>
 </form>
 """
+
+_STATUS_TEMPLATE = page("Status do sistema", """
+<p><a href="/tenants">&larr; voltar</a></p>
+<h1>Status do sistema</h1>
+<p>Diagnóstico rápido do que está configurado e com dado de verdade — sem mostrar
+nenhum valor de senha/token, só se está presente ou não.</p>
+
+<h2>Integrações (variáveis de ambiente)</h2>
+<table>
+<tr><th>Variável</th><th>Status</th></tr>
+{% for nome, configurado in integracoes %}
+<tr><td>{{ nome }}</td><td>{{ "✅ configurado" if configurado else "❌ não configurado" }}</td></tr>
+{% endfor %}
+</table>
+
+<h2>Dados Abertos da PGFN (pré-análise)</h2>
+<p>Inscrições importadas: <strong>{{ dividas_abertas_count }}</strong>
+{% if dividas_abertas_count == 0 %}— nenhuma ainda, então a pré-análise não mostra data de
+inscrição nem ajuizamento/protesto pra nenhum CNPJ. <a href="/admin/pgfn-dados-abertos">Importar agora &rarr;</a>
+{% endif %}</p>
+
+<h2>Leads de campanha por tese</h2>
+<table>
+<tr><th>Tese</th><th>Leads</th><th>Com e-mail</th><th>Com telefone</th></tr>
+{% for tese, total, com_email, com_telefone in leads_por_tese %}
+<tr><td>{{ tese }}</td><td>{{ total }}</td><td>{{ com_email }}</td><td>{{ com_telefone }}</td></tr>
+{% endfor %}
+</table>
+{% if not leads_por_tese %}<p>Nenhum lead importado ainda em nenhuma tese. <a href="/admin/campanhas/leads/importar">Importar &rarr;</a></p>{% endif %}
+
+<h2>Templates de e-mail — status do texto</h2>
+<table>
+<tr><th>Tese</th><th>E-mail inicial</th><th>WhatsApp</th></tr>
+{% for tese, email_status, whatsapp_status in templates_status %}
+<tr><td>{{ tese }}</td><td>{{ email_status }}</td><td>{{ whatsapp_status }}</td></tr>
+{% endfor %}
+</table>
+""")
 
 _TENANT_CRIADO_TEMPLATE = """
 <!doctype html>
@@ -575,6 +616,59 @@ def create_app(
         return render_template_string(
             _PGFN_DADOS_ABERTOS_TEMPLATE,
             sucesso=f"{quantidade} inscrição(ões) importada(s)/atualizada(s).",
+        )
+
+    @app.get("/admin/status")
+    def status_sistema():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+
+        from src.campaigns.engine import tem_mensagem_whatsapp_dedicada
+        from src.campaigns.models import TIPO_INICIAL
+
+        integracoes = [
+            ("INFOSIMPLES_API_TOKEN (CND + Lista de Devedores na pré-análise)", bool(os.environ.get("INFOSIMPLES_API_TOKEN"))),
+            ("CNPJA_API_TOKEN (dado cadastral completo + Cartão CNPJ)", bool(os.environ.get("CNPJA_API_TOKEN"))),
+            ("EXA_API_KEY (busca automática de e-mail dos leads)", bool(os.environ.get("EXA_API_KEY"))),
+            ("SMTP_HOST/PORT/USERNAME/PASSWORD (envio de e-mail da campanha)",
+             bool(os.environ.get("SMTP_HOST") and os.environ.get("SMTP_PORT") and os.environ.get("SMTP_USERNAME") and os.environ.get("SMTP_PASSWORD"))),
+            ("CRON_SECRET (cron automático do Vercel)", bool(os.environ.get("CRON_SECRET"))),
+            ("WHATSAPP_EQUIPE_EMAIL (resumo diário de telefones pra equipe)", bool(os.environ.get("WHATSAPP_EQUIPE_EMAIL"))),
+            ("BREVO_API_KEY (sincronização de engajados)", bool(os.environ.get("BREVO_API_KEY"))),
+        ]
+
+        conn = _connect()
+        dividas_abertas_count = storage.count_dividas_abertas_pgfn(conn)
+        conn.close()
+
+        campanhas_conn = campaigns_storage.connect(campaigns_db_path or campaigns_storage.DEFAULT_DB_PATH)
+        todas_teses = sorted(set(campaigns_storage.list_teses(campanhas_conn)) | set(campaigns_storage.list_template_teses(campanhas_conn)))
+        leads_por_tese = []
+        for tese in todas_teses:
+            leads = campaigns_storage.list_leads(campanhas_conn, tese)
+            if not leads:
+                continue
+            leads_por_tese.append(
+                (tese, len(leads), sum(1 for lead in leads if lead.email), sum(1 for lead in leads if lead.telefone))
+            )
+
+        templates_status = []
+        for tese in todas_teses:
+            template = campaigns_storage.get_template(campanhas_conn, tese, TIPO_INICIAL)
+            email_status = "⚠️ rascunho" if (template and template.headline.startswith("[AJUSTAR")) else (
+                "✅ texto real" if template else "— sem template"
+            )
+            whatsapp_status = "✅ mensagem própria" if tem_mensagem_whatsapp_dedicada(tese) else "— mensagem genérica de dívida"
+            templates_status.append((tese, email_status, whatsapp_status))
+        campanhas_conn.close()
+
+        return render_template_string(
+            _STATUS_TEMPLATE,
+            integracoes=integracoes,
+            dividas_abertas_count=dividas_abertas_count,
+            leads_por_tese=leads_por_tese,
+            templates_status=templates_status,
         )
 
     @app.route("/pre-analise", methods=["GET", "POST"])

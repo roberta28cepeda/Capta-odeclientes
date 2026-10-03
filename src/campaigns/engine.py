@@ -272,6 +272,12 @@ _MENSAGENS_WHATSAPP_POR_TESE: dict[str, str] = {
 }
 
 
+def tem_mensagem_whatsapp_dedicada(tese: str) -> bool:
+    """Usado só pra diagnóstico (`/admin/status`) — indica se a tese tem
+    mensagem de WhatsApp própria ou cai na genérica de dívida."""
+    return tese in _MENSAGENS_WHATSAPP_POR_TESE
+
+
 def montar_link_whatsapp(lead: Lead) -> str | None:
     """Link `wa.me` com mensagem pré-escrita pra equipe mandar a primeira
     mensagem pro lead — nunca automático (ver `README.md`, decisão de

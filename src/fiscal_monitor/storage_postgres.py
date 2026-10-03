@@ -590,3 +590,9 @@ def buscar_dados_abertos_por_inscricoes(conn, numeros: list[str]) -> dict[str, d
         }
         for row in rows
     }
+
+
+def count_dividas_abertas_pgfn(conn) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) AS n FROM pgfn_dividas_abertas")
+        return cur.fetchone()["n"]

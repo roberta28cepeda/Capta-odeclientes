@@ -562,3 +562,7 @@ def buscar_dados_abertos_por_inscricoes(conn: sqlite3.Connection, numeros: list[
         }
         for row in rows
     }
+
+
+def count_dividas_abertas_pgfn(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT COUNT(*) AS n FROM pgfn_dividas_abertas").fetchone()["n"]
