@@ -733,6 +733,10 @@ def create_app(
         if infosimples_token:
             try:
                 situacao_fiscal = montar_situacao_fiscal(consultar_cnd_federal(cnpj, infosimples_token))
+            except ConsultaDebitosError as exc:
+                alertas.append(f"Não foi possível consultar CND federal (Receita Federal/PGFN): {exc}")
+
+            try:
                 divida_ativa = montar_divida_ativa(consultar_lista_devedores(cnpj, infosimples_token))
                 if divida_ativa:
                     conn = _connect()
@@ -740,9 +744,10 @@ def create_app(
                         divida_ativa = enriquecer_com_dados_abertos(conn, divida_ativa)
                     finally:
                         conn.close()
-                alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa)
             except ConsultaDebitosError as exc:
-                alertas.append(f"Não foi possível consultar situação fiscal/dívida ativa (PGFN): {exc}")
+                alertas.append(f"Não foi possível consultar lista de devedores da PGFN: {exc}")
+
+            alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa)
 
         fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)

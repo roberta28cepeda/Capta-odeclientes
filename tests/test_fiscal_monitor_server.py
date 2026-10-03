@@ -417,6 +417,9 @@ def test_pre_analise_still_generates_pdf_when_infosimples_falha(app, monkeypatch
     with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=SAMPLE_CNPJ_RESPONSE), patch(
         "src.fiscal_monitor.server.consultar_cnd_federal",
         side_effect=ConsultaDebitosError("saldo insuficiente"),
+    ), patch(
+        "src.fiscal_monitor.server.consultar_lista_devedores",
+        side_effect=ConsultaDebitosError("saldo insuficiente"),
     ):
         response = app.test_client().post(
             "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
@@ -424,6 +427,34 @@ def test_pre_analise_still_generates_pdf_when_infosimples_falha(app, monkeypatch
 
     assert response.status_code == 200
     assert response.mimetype == "application/pdf"
+
+
+def test_pre_analise_lista_devedores_still_runs_when_cnd_federal_falha(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    devedores_response = {
+        "total_divida": 7359.68,
+        "total_tributario": 0.0,
+        "total_nao_tributario": 7359.68,
+        "naturezas_debitos": [
+            {"descricao": "FGTS", "total": 7359.68, "debitos": [{"inscricao": "FGAL1", "valor_divida": 7359.68}]}
+        ],
+    }
+    with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=SAMPLE_CNPJ_RESPONSE), patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal",
+        side_effect=ConsultaDebitosError("código 611: dados incompletos na origem"),
+    ), patch(
+        "src.fiscal_monitor.server.consultar_lista_devedores", return_value=devedores_response
+    ) as mock_devedores, patch(
+        "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
+    ):
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    mock_devedores.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
 
 
 def test_pre_analise_enriquece_divida_ativa_com_dados_abertos(app, monkeypatch):
