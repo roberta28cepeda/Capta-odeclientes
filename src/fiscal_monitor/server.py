@@ -21,10 +21,14 @@ from src.fiscal_monitor.cron import check_all_tenants
 from src.fiscal_monitor.infosimples import (
     ConsultaDebitosError,
     consultar_cnd_federal,
+    consultar_cndt_trabalhista,
     consultar_lista_devedores,
+    consultar_regularidade_fgts,
     enriquecer_com_dados_abertos,
     gerar_alertas_fiscais,
     montar_divida_ativa,
+    montar_situacao_cndt,
+    montar_situacao_fgts,
     montar_situacao_fiscal,
 )
 from src.fiscal_monitor.pgfn_dados_abertos import ArquivoDadosAbertosError, importar_arquivo
@@ -628,7 +632,10 @@ def create_app(
         from src.campaigns.models import TIPO_INICIAL
 
         integracoes = [
-            ("INFOSIMPLES_API_TOKEN (CND + Lista de Devedores na pré-análise)", bool(os.environ.get("INFOSIMPLES_API_TOKEN"))),
+            (
+                "INFOSIMPLES_API_TOKEN (CND + Lista de Devedores + FGTS + CNDT na pré-análise)",
+                bool(os.environ.get("INFOSIMPLES_API_TOKEN")),
+            ),
             ("CNPJA_API_TOKEN (dado cadastral completo + Cartão CNPJ)", bool(os.environ.get("CNPJA_API_TOKEN"))),
             ("EXA_API_KEY (busca automática de e-mail dos leads)", bool(os.environ.get("EXA_API_KEY"))),
             ("SMTP_HOST/PORT/USERNAME/PASSWORD (envio de e-mail da campanha)",
@@ -729,6 +736,8 @@ def create_app(
 
         situacao_fiscal = None
         divida_ativa = None
+        situacao_fgts = None
+        situacao_cndt = None
         infosimples_token = os.environ.get("INFOSIMPLES_API_TOKEN")
         if infosimples_token:
             try:
@@ -747,7 +756,17 @@ def create_app(
             except ConsultaDebitosError as exc:
                 alertas.append(f"Não foi possível consultar lista de devedores da PGFN: {exc}")
 
-            alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa)
+            try:
+                situacao_fgts = montar_situacao_fgts(consultar_regularidade_fgts(cnpj, infosimples_token))
+            except ConsultaDebitosError as exc:
+                alertas.append(f"Não foi possível consultar regularidade do FGTS (Caixa): {exc}")
+
+            try:
+                situacao_cndt = montar_situacao_cndt(consultar_cndt_trabalhista(cnpj, infosimples_token))
+            except ConsultaDebitosError as exc:
+                alertas.append(f"Não foi possível consultar CNDT (débitos trabalhistas): {exc}")
+
+            alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt)
 
         fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
@@ -759,6 +778,8 @@ def create_app(
             logo_path=logo_path,
             situacao_fiscal=situacao_fiscal,
             divida_ativa=divida_ativa,
+            situacao_fgts=situacao_fgts,
+            situacao_cndt=situacao_cndt,
         )
 
         @after_this_request
@@ -826,6 +847,16 @@ def create_app(
             resultado["lista_devedores"] = consultar_lista_devedores(cnpj, token)
         except ConsultaDebitosError as exc:
             resultado["lista_devedores_erro"] = str(exc)
+
+        try:
+            resultado["regularidade_fgts"] = consultar_regularidade_fgts(cnpj, token)
+        except ConsultaDebitosError as exc:
+            resultado["regularidade_fgts_erro"] = str(exc)
+
+        try:
+            resultado["cndt_trabalhista"] = consultar_cndt_trabalhista(cnpj, token)
+        except ConsultaDebitosError as exc:
+            resultado["cndt_trabalhista_erro"] = str(exc)
 
         return jsonify(resultado)
 

@@ -15,7 +15,13 @@ from src.common.pdf_styles import (
     TITLE_STYLE,
     new_document,
 )
-from src.fiscal_monitor.infosimples import DividaAtivaPgfn, SituacaoFiscalPgfn, formatar_valor_brl
+from src.fiscal_monitor.infosimples import (
+    DividaAtivaPgfn,
+    SituacaoCndt,
+    SituacaoFgts,
+    SituacaoFiscalPgfn,
+    formatar_valor_brl,
+)
 from src.fiscal_monitor.preanalise import PreAnalise
 from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
 
@@ -84,6 +90,8 @@ def render_pre_analise_pdf(
     logo_path: str | None = None,
     situacao_fiscal: SituacaoFiscalPgfn | None = None,
     divida_ativa: DividaAtivaPgfn | None = None,
+    situacao_fgts: SituacaoFgts | None = None,
+    situacao_cndt: SituacaoCndt | None = None,
 ) -> None:
     story = []
     if logo_path:
@@ -141,17 +149,38 @@ def render_pre_analise_pdf(
                     detalhe += f" · inscrita em {debito.data_inscricao} · {debito.situacao_inscricao}"
                 story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;- {detalhe}", BULLET_STYLE))
 
+    if situacao_fgts is not None:
+        story.append(Paragraph("Regularidade do FGTS (Caixa)", HEADING_STYLE))
+        story.append(Paragraph(f"Situação: {situacao_fgts.situacao or '-'}", BODY_STYLE))
+        if situacao_fgts.validade_fim_data:
+            story.append(
+                Paragraph(
+                    f"Validade: {situacao_fgts.validade_inicio_data or '-'} a {situacao_fgts.validade_fim_data}",
+                    BODY_STYLE,
+                )
+            )
+
+    if situacao_cndt is not None:
+        story.append(Paragraph("Débitos Trabalhistas (CNDT/TST)", HEADING_STYLE))
+        story.append(Paragraph(f"Consta débito/processo trabalhista: {_sim_nao(situacao_cndt.consta_debito)}", BODY_STYLE))
+        if situacao_cndt.total_processos:
+            story.append(Paragraph(f"Total de processos: {situacao_cndt.total_processos}", BODY_STYLE))
+
     story.append(Paragraph("Alertas da pré-análise", ALERT_HEADING_STYLE))
     for alerta in alertas:
         story.append(Paragraph(f"• {alerta}", BULLET_STYLE))
 
     story.append(Spacer(1, 16))
+    consultou_infosimples = any(
+        dado is not None for dado in (situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt)
+    )
     nota_final = (
         "Esta pré-análise usa apenas dados públicos (situação cadastral, enquadramento "
-        "tributário e, quando disponível, situação fiscal/dívida ativa na Receita Federal e "
-        "PGFN). Multas, parcelamentos e o histórico completo de pendências exigem procuração "
-        "eletrônica e acesso ao e-CAC para uma verificação completa."
-        if situacao_fiscal is not None or divida_ativa is not None
+        "tributário e, quando disponível, situação fiscal/dívida ativa na Receita Federal, "
+        "PGFN, regularidade do FGTS e débitos trabalhistas na Justiça do Trabalho). Multas, "
+        "parcelamentos e o histórico completo de pendências exigem procuração eletrônica e "
+        "acesso ao e-CAC para uma verificação completa."
+        if consultou_infosimples
         else
         "Esta pré-análise usa apenas dados públicos (situação cadastral e "
         "enquadramento tributário). Pendências, multas e débitos fiscais exigem "

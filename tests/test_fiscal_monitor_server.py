@@ -401,7 +401,9 @@ def test_pre_analise_includes_situacao_fiscal_when_infosimples_configured(app, m
         return_value={"debitos_pgfn": True, "debitos_rfb": False, "tipo": "Positiva"},
     ) as mock_cnd, patch(
         "src.fiscal_monitor.server.consultar_lista_devedores", return_value=None
-    ) as mock_devedores:
+    ) as mock_devedores, patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
         response = app.test_client().post(
             "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
         )
@@ -419,6 +421,12 @@ def test_pre_analise_still_generates_pdf_when_infosimples_falha(app, monkeypatch
         side_effect=ConsultaDebitosError("saldo insuficiente"),
     ), patch(
         "src.fiscal_monitor.server.consultar_lista_devedores",
+        side_effect=ConsultaDebitosError("saldo insuficiente"),
+    ), patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts",
+        side_effect=ConsultaDebitosError("saldo insuficiente"),
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista",
         side_effect=ConsultaDebitosError("saldo insuficiente"),
     ):
         response = app.test_client().post(
@@ -447,7 +455,9 @@ def test_pre_analise_lista_devedores_still_runs_when_cnd_federal_falha(app, monk
         "src.fiscal_monitor.server.consultar_lista_devedores", return_value=devedores_response
     ) as mock_devedores, patch(
         "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
-    ):
+    ), patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
         response = app.test_client().post(
             "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
         )
@@ -472,7 +482,9 @@ def test_pre_analise_enriquece_divida_ativa_com_dados_abertos(app, monkeypatch):
         "src.fiscal_monitor.server.consultar_cnd_federal", return_value={}
     ), patch("src.fiscal_monitor.server.consultar_lista_devedores", return_value=devedores_response), patch(
         "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
-    ) as mock_enriquecer:
+    ) as mock_enriquecer, patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
         response = app.test_client().post(
             "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
         )
@@ -885,7 +897,13 @@ def test_diagnostico_infosimples_calls_real_functions_and_returns_raw_response(a
     with patch(
         "src.fiscal_monitor.server.consultar_cnd_federal",
         return_value={"tipo": "Negativa", "debitos_pgfn": False, "debitos_rfb": False},
-    ) as mock_cnd, patch("src.fiscal_monitor.server.consultar_lista_devedores", return_value=None) as mock_devedores:
+    ) as mock_cnd, patch(
+        "src.fiscal_monitor.server.consultar_lista_devedores", return_value=None
+    ) as mock_devedores, patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ) as mock_fgts, patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ) as mock_cndt:
         response = app.test_client().get(
             "/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01",
             headers=_basic_auth_header("admin", "senha-secreta"),
@@ -896,8 +914,12 @@ def test_diagnostico_infosimples_calls_real_functions_and_returns_raw_response(a
     assert data["infosimples_token_configurado"] is True
     assert data["cnd_federal"]["tipo"] == "Negativa"
     assert data["lista_devedores"] is None
+    assert data["regularidade_fgts"]["situacao"] == "REGULAR"
+    assert data["cndt_trabalhista"]["consta"] is False
     mock_cnd.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
     mock_devedores.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+    mock_fgts.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+    mock_cndt.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
 
 
 def test_diagnostico_infosimples_surfaces_consulta_error(app, monkeypatch):
@@ -906,7 +928,13 @@ def test_diagnostico_infosimples_surfaces_consulta_error(app, monkeypatch):
 
     with patch(
         "src.fiscal_monitor.server.consultar_cnd_federal", side_effect=ConsultaDebitosError("saldo insuficiente")
-    ), patch("src.fiscal_monitor.server.consultar_lista_devedores", side_effect=ConsultaDebitosError("saldo insuficiente")):
+    ), patch(
+        "src.fiscal_monitor.server.consultar_lista_devedores", side_effect=ConsultaDebitosError("saldo insuficiente")
+    ), patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", side_effect=ConsultaDebitosError("saldo insuficiente")
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", side_effect=ConsultaDebitosError("saldo insuficiente")
+    ):
         response = app.test_client().get(
             "/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01",
             headers=_basic_auth_header("admin", "senha-secreta"),
@@ -916,3 +944,5 @@ def test_diagnostico_infosimples_surfaces_consulta_error(app, monkeypatch):
     data = response.get_json()
     assert "saldo insuficiente" in data["cnd_federal_erro"]
     assert "saldo insuficiente" in data["lista_devedores_erro"]
+    assert "saldo insuficiente" in data["regularidade_fgts_erro"]
+    assert "saldo insuficiente" in data["cndt_trabalhista_erro"]

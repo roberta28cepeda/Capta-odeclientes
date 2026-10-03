@@ -7,7 +7,7 @@ revendedora paga que automatiza essas consultas nos sites oficiais e
 devolve JSON. Usada só quando `INFOSIMPLES_API_TOKEN` está configurada —
 sem isso, a pré-análise segue funcionando normal, só sem essa seção.
 
-Dois produtos, mesma conta/token:
+Quatro produtos, mesma conta/token:
 
 - CND Federal (`/receita-federal/pgfn/nova`): emite uma nova Certidão de
   Débitos Relativos a Créditos Tributários Federais e à Dívida Ativa da
@@ -15,11 +15,17 @@ Dois produtos, mesma conta/token:
 - Lista de Devedores (`/receita-federal/pgfn/devedores`): consulta se o
   CNPJ está inscrito em dívida ativa da União/FGTS, com o valor detalhado
   por natureza do débito.
+- Regularidade do FGTS (`/caixa/regularidade`): Certificado de
+  Regularidade do FGTS (CRF) — diz se o empregador está regular perante a
+  Caixa.
+- CNDT (`/tst/cndt`): Certidão Negativa de Débitos Trabalhistas do TST —
+  diz se há débito/processo trabalhista em aberto.
 
 Cada chamada tem custo (~R$0,10 + taxa base por consulta, cobrado do
 saldo da conta InfoSimples) — por isso só roda quando a integração está
-de fato configurada, e uma falha aqui não derruba a pré-análise inteira
-(vira só um alerta no PDF).
+de fato configurada, e uma falha em qualquer uma delas não derruba a
+pré-análise inteira nem bloqueia as outras consultas (cada uma roda e
+falha de forma independente; uma falha vira só um alerta no PDF).
 """
 
 from __future__ import annotations
@@ -32,6 +38,8 @@ from src.fiscal_monitor.preanalise import only_digits
 
 INFOSIMPLES_CND_URL = "https://api.infosimples.com/api/v2/consultas/receita-federal/pgfn/nova"
 INFOSIMPLES_DEVEDORES_URL = "https://api.infosimples.com/api/v2/consultas/receita-federal/pgfn/devedores"
+INFOSIMPLES_FGTS_URL = "https://api.infosimples.com/api/v2/consultas/caixa/regularidade"
+INFOSIMPLES_CNDT_URL = "https://api.infosimples.com/api/v2/consultas/tst/cndt"
 
 # Timeout que a própria InfoSimples usa pra esperar o site de origem (gov.br)
 # responder — pode ser lento. Mantido bem abaixo do limite de function do
@@ -81,6 +89,21 @@ class DividaAtivaPgfn:
     naturezas: list[NaturezaDebito] = field(default_factory=list)
 
 
+@dataclass
+class SituacaoFgts:
+    situacao: str | None
+    validade_inicio_data: str | None
+    validade_fim_data: str | None
+
+
+@dataclass
+class SituacaoCndt:
+    consta_debito: bool | None
+    total_processos: int | None
+    certidao_codigo: str | None
+    validade_data: str | None
+
+
 def _post_infosimples(url: str, cnpj: str, token: str, session: requests.Session | None = None) -> dict:
     session = session or requests.Session()
     try:
@@ -122,6 +145,20 @@ def consultar_lista_devedores(cnpj: str, token: str, session: requests.Session |
     return dados[0] if dados else None
 
 
+def consultar_regularidade_fgts(cnpj: str, token: str, session: requests.Session | None = None) -> dict:
+    """Consulta o Certificado de Regularidade do FGTS (CRF) na InfoSimples."""
+    corpo = _post_infosimples(INFOSIMPLES_FGTS_URL, cnpj, token, session=session)
+    dados = corpo.get("data") or []
+    return dados[0] if dados else {}
+
+
+def consultar_cndt_trabalhista(cnpj: str, token: str, session: requests.Session | None = None) -> dict:
+    """Consulta a CNDT (Certidão Negativa de Débitos Trabalhistas) na InfoSimples."""
+    corpo = _post_infosimples(INFOSIMPLES_CNDT_URL, cnpj, token, session=session)
+    dados = corpo.get("data") or []
+    return dados[0] if dados else {}
+
+
 def montar_situacao_fiscal(dados: dict) -> SituacaoFiscalPgfn:
     return SituacaoFiscalPgfn(
         conseguiu_certidao_negativa=dados.get("conseguiu_emitir_certidao_negativa"),
@@ -152,6 +189,23 @@ def montar_divida_ativa(dados: dict | None) -> DividaAtivaPgfn | None:
         total_tributario=dados.get("total_tributario", 0.0),
         total_nao_tributario=dados.get("total_nao_tributario", 0.0),
         naturezas=naturezas,
+    )
+
+
+def montar_situacao_fgts(dados: dict) -> SituacaoFgts:
+    return SituacaoFgts(
+        situacao=dados.get("situacao"),
+        validade_inicio_data=dados.get("validade_inicio_data"),
+        validade_fim_data=dados.get("validade_fim_data"),
+    )
+
+
+def montar_situacao_cndt(dados: dict) -> SituacaoCndt:
+    return SituacaoCndt(
+        consta_debito=dados.get("consta"),
+        total_processos=dados.get("total_de_processos"),
+        certidao_codigo=dados.get("certidao_codigo"),
+        validade_data=dados.get("validade_data"),
     )
 
 
@@ -194,7 +248,10 @@ def enriquecer_com_dados_abertos(conn, divida_ativa: DividaAtivaPgfn | None) -> 
 
 
 def gerar_alertas_fiscais(
-    situacao_fiscal: SituacaoFiscalPgfn | None, divida_ativa: DividaAtivaPgfn | None
+    situacao_fiscal: SituacaoFiscalPgfn | None,
+    divida_ativa: DividaAtivaPgfn | None,
+    situacao_fgts: SituacaoFgts | None = None,
+    situacao_cndt: SituacaoCndt | None = None,
 ) -> list[str]:
     """Alertas com base em débito/dívida ativa real — complementa
     `preanalise.gerar_alertas`, que só olha dado cadastral.
@@ -226,5 +283,12 @@ def gerar_alertas_fiscais(
                 f"{len(protestadas)} inscrição(ões) já protestada(s) em cartório pela PGFN — "
                 "cruzado com os Dados Abertos da PGFN."
             )
+
+    if situacao_fgts and situacao_fgts.situacao and situacao_fgts.situacao.strip().upper() != "REGULAR":
+        alertas.append(f"Situação irregular perante o FGTS (CRF — Caixa): {situacao_fgts.situacao}.")
+
+    if situacao_cndt and situacao_cndt.consta_debito:
+        detalhe = f" ({situacao_cndt.total_processos} processo(s))" if situacao_cndt.total_processos else ""
+        alertas.append(f"Débitos trabalhistas identificados na Justiça do Trabalho (CNDT/TST){detalhe}.")
 
     return alertas

@@ -1,7 +1,14 @@
 import os
 import tempfile
 
-from src.fiscal_monitor.infosimples import DebitoInscricao, DividaAtivaPgfn, NaturezaDebito, SituacaoFiscalPgfn
+from src.fiscal_monitor.infosimples import (
+    DebitoInscricao,
+    DividaAtivaPgfn,
+    NaturezaDebito,
+    SituacaoCndt,
+    SituacaoFgts,
+    SituacaoFiscalPgfn,
+)
 from src.fiscal_monitor.pdf import render_pre_analise_pdf, render_portfolio_report
 from src.fiscal_monitor.preanalise import PreAnalise
 from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
@@ -89,6 +96,26 @@ def test_render_pre_analise_pdf_includes_debitos_enriquecidos_com_dados_abertos(
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "pre_analise_enriquecida.pdf")
         render_pre_analise_pdf(PRE_ANALISE, ["Inscrição já ajuizada."], path, divida_ativa=divida_ativa)
+
+        assert os.path.exists(path)
+        assert os.path.getsize(path) > 0
+        with open(path, "rb") as f:
+            assert f.read(4) == b"%PDF"
+
+
+def test_render_pre_analise_pdf_includes_fgts_e_cndt():
+    situacao_fgts = SituacaoFgts(situacao="IRREGULAR", validade_inicio_data=None, validade_fim_data=None)
+    situacao_cndt = SituacaoCndt(consta_debito=True, total_processos=3, certidao_codigo="123456", validade_data="11/11/2026")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "pre_analise_fgts_cndt.pdf")
+        render_pre_analise_pdf(
+            PRE_ANALISE,
+            ["Situação irregular perante o FGTS.", "Débitos trabalhistas identificados."],
+            path,
+            situacao_fgts=situacao_fgts,
+            situacao_cndt=situacao_cndt,
+        )
 
         assert os.path.exists(path)
         assert os.path.getsize(path) > 0

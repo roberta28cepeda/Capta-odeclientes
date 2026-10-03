@@ -6,12 +6,49 @@ import requests
 from src.fiscal_monitor.infosimples import (
     ConsultaDebitosError,
     consultar_cnd_federal,
+    consultar_cndt_trabalhista,
     consultar_lista_devedores,
+    consultar_regularidade_fgts,
     enriquecer_com_dados_abertos,
     gerar_alertas_fiscais,
     montar_divida_ativa,
+    montar_situacao_cndt,
+    montar_situacao_fgts,
     montar_situacao_fiscal,
 )
+
+SAMPLE_FGTS_RESPONSE = {
+    "code": 200,
+    "code_message": "A requisição foi processada com sucesso.",
+    "errors": [],
+    "header": {"service": "caixa/regularidade"},
+    "data_count": 1,
+    "data": [
+        {
+            "cnpj": "11.222.333/0001-44",
+            "situacao": "REGULAR",
+            "validade_inicio_data": "01/01/2026",
+            "validade_fim_data": "31/01/2026",
+        }
+    ],
+}
+
+SAMPLE_CNDT_RESPONSE = {
+    "code": 200,
+    "code_message": "A requisição foi processada com sucesso.",
+    "errors": [],
+    "header": {"service": "tst/cndt"},
+    "data_count": 1,
+    "data": [
+        {
+            "cnpj": "11.222.333/0001-44",
+            "consta": False,
+            "total_de_processos": 0,
+            "certidao_codigo": "123456",
+            "validade_data": "11/11/2026",
+        }
+    ],
+}
 
 SAMPLE_CND_RESPONSE = {
     "code": 200,
@@ -207,3 +244,86 @@ def test_gerar_alertas_fiscais_flags_ajuizada_e_protestada():
     alertas = gerar_alertas_fiscais(None, divida)
 
     assert any("ajuizada" in a for a in alertas)
+
+
+def test_consultar_regularidade_fgts_sends_cnpj_and_token():
+    session = MagicMock()
+    session.post.return_value = _mock_response(200, SAMPLE_FGTS_RESPONSE)
+
+    dados = consultar_regularidade_fgts("11.222.333/0001-44", "TOKEN123", session=session)
+
+    assert dados["situacao"] == "REGULAR"
+    call_args, call_kwargs = session.post.call_args
+    assert call_args[0] == "https://api.infosimples.com/api/v2/consultas/caixa/regularidade"
+    assert call_kwargs["data"]["cnpj"] == "11222333000144"
+    assert call_kwargs["data"]["token"] == "TOKEN123"
+
+
+def test_consultar_regularidade_fgts_raises_on_error_code():
+    session = MagicMock()
+    session.post.return_value = _mock_response(200, {"code": 611, "code_message": "CNPJ inválido.", "errors": []})
+
+    with pytest.raises(ConsultaDebitosError, match="CNPJ inválido"):
+        consultar_regularidade_fgts("00.000.000/0000-00", "TOKEN123", session=session)
+
+
+def test_consultar_cndt_trabalhista_sends_cnpj_and_token():
+    session = MagicMock()
+    session.post.return_value = _mock_response(200, SAMPLE_CNDT_RESPONSE)
+
+    dados = consultar_cndt_trabalhista("11.222.333/0001-44", "TOKEN123", session=session)
+
+    assert dados["consta"] is False
+    call_args, call_kwargs = session.post.call_args
+    assert call_args[0] == "https://api.infosimples.com/api/v2/consultas/tst/cndt"
+    assert call_kwargs["data"]["cnpj"] == "11222333000144"
+    assert call_kwargs["data"]["token"] == "TOKEN123"
+
+
+def test_montar_situacao_fgts_parses_fields():
+    situacao = montar_situacao_fgts(SAMPLE_FGTS_RESPONSE["data"][0])
+
+    assert situacao.situacao == "REGULAR"
+    assert situacao.validade_inicio_data == "01/01/2026"
+    assert situacao.validade_fim_data == "31/01/2026"
+
+
+def test_montar_situacao_cndt_parses_fields():
+    situacao = montar_situacao_cndt(SAMPLE_CNDT_RESPONSE["data"][0])
+
+    assert situacao.consta_debito is False
+    assert situacao.total_processos == 0
+    assert situacao.certidao_codigo == "123456"
+    assert situacao.validade_data == "11/11/2026"
+
+
+def test_gerar_alertas_fiscais_flags_fgts_irregular():
+    situacao_fgts = montar_situacao_fgts({"situacao": "IRREGULAR"})
+
+    alertas = gerar_alertas_fiscais(None, None, situacao_fgts=situacao_fgts)
+
+    assert any("FGTS" in a and "IRREGULAR" in a for a in alertas)
+
+
+def test_gerar_alertas_fiscais_sem_alerta_fgts_quando_regular():
+    situacao_fgts = montar_situacao_fgts({"situacao": "REGULAR"})
+
+    alertas = gerar_alertas_fiscais(None, None, situacao_fgts=situacao_fgts)
+
+    assert alertas == []
+
+
+def test_gerar_alertas_fiscais_flags_cndt_com_debito():
+    situacao_cndt = montar_situacao_cndt({"consta": True, "total_de_processos": 3})
+
+    alertas = gerar_alertas_fiscais(None, None, situacao_cndt=situacao_cndt)
+
+    assert any("CNDT" in a and "3 processo" in a for a in alertas)
+
+
+def test_gerar_alertas_fiscais_sem_alerta_cndt_quando_nao_consta():
+    situacao_cndt = montar_situacao_cndt({"consta": False})
+
+    alertas = gerar_alertas_fiscais(None, None, situacao_cndt=situacao_cndt)
+
+    assert alertas == []
