@@ -792,6 +792,38 @@ def create_app(
             headers={"Content-Disposition": f"attachment; filename=cartao_cnpj_{only_digits(cnpj)}.pdf"},
         )
 
+    @app.get("/admin/diagnostico/infosimples")
+    def diagnostico_infosimples():
+        """Chama a InfoSimples direto (sem passar pelo PDF/alertas) e
+        devolve a resposta bruta em JSON — pra diagnosticar se a chamada
+        de verdade está acontecendo (token válido, API respondendo),
+        separado de qualquer problema de como o resultado é exibido.
+        """
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+
+        cnpj = (request.args.get("cnpj") or "").strip()
+        if not validar_cnpj(cnpj):
+            return jsonify({"error": "CNPJ inválido — confira os dígitos."}), 400
+
+        token = os.environ.get("INFOSIMPLES_API_TOKEN")
+        resultado = {"cnpj": cnpj, "infosimples_token_configurado": bool(token)}
+        if not token:
+            return jsonify(resultado)
+
+        try:
+            resultado["cnd_federal"] = consultar_cnd_federal(cnpj, token)
+        except ConsultaDebitosError as exc:
+            resultado["cnd_federal_erro"] = str(exc)
+
+        try:
+            resultado["lista_devedores"] = consultar_lista_devedores(cnpj, token)
+        except ConsultaDebitosError as exc:
+            resultado["lista_devedores_erro"] = str(exc)
+
+        return jsonify(resultado)
+
     @app.get("/tenants")
     def tenants_list():
         unauthorized = require_admin()

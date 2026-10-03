@@ -831,3 +831,57 @@ def test_pgfn_dados_abertos_post_rejeita_arquivo_com_colunas_erradas(app, monkey
     )
     assert response.status_code == 400
     assert "Colunas esperadas".encode() in response.data
+
+
+def test_diagnostico_infosimples_requires_admin(app):
+    response = app.test_client().get("/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01")
+    assert response.status_code == 401
+
+
+def test_diagnostico_infosimples_reports_token_not_configured(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get(
+        "/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+    assert response.get_json() == {"cnpj": "33.000.167/0001-01", "infosimples_token_configurado": False}
+
+
+def test_diagnostico_infosimples_calls_real_functions_and_returns_raw_response(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+
+    with patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal",
+        return_value={"tipo": "Negativa", "debitos_pgfn": False, "debitos_rfb": False},
+    ) as mock_cnd, patch("src.fiscal_monitor.server.consultar_lista_devedores", return_value=None) as mock_devedores:
+        response = app.test_client().get(
+            "/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01",
+            headers=_basic_auth_header("admin", "senha-secreta"),
+        )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["infosimples_token_configurado"] is True
+    assert data["cnd_federal"]["tipo"] == "Negativa"
+    assert data["lista_devedores"] is None
+    mock_cnd.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+    mock_devedores.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+
+
+def test_diagnostico_infosimples_surfaces_consulta_error(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+
+    with patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal", side_effect=ConsultaDebitosError("saldo insuficiente")
+    ), patch("src.fiscal_monitor.server.consultar_lista_devedores", side_effect=ConsultaDebitosError("saldo insuficiente")):
+        response = app.test_client().get(
+            "/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01",
+            headers=_basic_auth_header("admin", "senha-secreta"),
+        )
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert "saldo insuficiente" in data["cnd_federal_erro"]
+    assert "saldo insuficiente" in data["lista_devedores_erro"]
