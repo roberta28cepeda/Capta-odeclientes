@@ -1,8 +1,4 @@
 {
   "builds": [{ "src": "api/index.py", "use": "@vercel/python" }],
-  "routes": [{ "src": "/(.*)", "dest": "api/index.py" }],
-  "crons": [
-    { "path": "/cron/check-all", "schedule": "0 8 * * *" },
-    { "path": "/cron/campanhas/rodar", "schedule": "0 12 * * *" }
-  ]
+  "routes": [{ "src": "/(.*)", "dest": "api/index.py" }]
 }
