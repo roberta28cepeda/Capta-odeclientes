@@ -100,6 +100,156 @@ class ManualFiscalProvider:
         return result
 
 
+def _parse_data_br(value: str | None) -> str | None:
+    """Converte data no formato DD/MM/YYYY (como a InfoSimples devolve) pra
+    ISO YYYY-MM-DD (formato que `monitor.days_until` espera). `None` se o
+    valor estiver vazio ou num formato inesperado.
+    """
+    value = (value or "").strip()
+    if not value:
+        return None
+    partes = value.split("/")
+    if len(partes) != 3:
+        return None
+    dia, mes, ano = partes
+    try:
+        return f"{int(ano):04d}-{int(mes):02d}-{int(dia):02d}"
+    except ValueError:
+        return None
+
+
+class InfoSimplesFiscalProvider:
+    """Provider automático: consulta CND federal, dívida ativa (Lista de
+    Devedores da PGFN), FGTS e CNDT via InfoSimples pra cada CNPJ — a
+    mesma fonte usada na pré-análise de lead e no dossiê fiscal da
+    carteira (`server.py`), mas aqui alimentando o motor de diff/alerta
+    (`monitor.py`) como qualquer outro provider: um achado novo vira
+    alerta de verdade (WhatsApp/e-mail) e some quando regularizado.
+
+    Pensado pra rodar uma vez por semana (ver o gate em
+    `cron.run_infosimples_semanal`/`server.cron_check_all`), não todo
+    dia — cada consulta tem custo. Uma falha numa das quatro consultas
+    pra um CNPJ não impede as outras três (mesmo padrão já usado na
+    pré-análise e no dossiê fiscal).
+    """
+
+    name = "infosimples_semanal"
+
+    def __init__(self, token: str):
+        self.token = token
+
+    def fetch(self, cnpjs: list[str] | None = None) -> dict[str, list[RawFinding]]:
+        if not cnpjs:
+            return {}
+
+        from src.fiscal_monitor.infosimples import (
+            ConsultaDebitosError,
+            consultar_cnd_federal,
+            consultar_cndt_trabalhista,
+            consultar_lista_devedores,
+            consultar_regularidade_fgts,
+        )
+
+        result: dict[str, list[RawFinding]] = {}
+        for cnpj in cnpjs:
+            findings: list[RawFinding] = []
+
+            try:
+                dados_cnd = consultar_cnd_federal(cnpj, self.token)
+                if dados_cnd.get("debitos_pgfn") or dados_cnd.get("debitos_rfb"):
+                    findings.append(
+                        RawFinding(
+                            cnpj=cnpj,
+                            esfera="federal",
+                            tipo="pendencia",
+                            descricao="Débito ativo identificado na CND federal (Receita Federal/PGFN)",
+                            valor=None,
+                            vencimento=None,
+                            pago=False,
+                        )
+                    )
+                validade = _parse_data_br(dados_cnd.get("validade_data"))
+                if validade:
+                    findings.append(
+                        RawFinding(
+                            cnpj=cnpj,
+                            esfera="federal",
+                            tipo="cnd",
+                            descricao=f"Certidão {dados_cnd.get('tipo') or 'federal'}",
+                            valor=None,
+                            vencimento=validade,
+                            pago=False,
+                        )
+                    )
+            except ConsultaDebitosError:
+                pass
+
+            try:
+                dados_devedores = consultar_lista_devedores(cnpj, self.token)
+                if dados_devedores:
+                    for natureza in dados_devedores.get("naturezas_debitos", []) or []:
+                        for debito in natureza.get("debitos", []) or []:
+                            findings.append(
+                                RawFinding(
+                                    cnpj=cnpj,
+                                    esfera="federal",
+                                    tipo="pendencia",
+                                    descricao=(
+                                        f"Dívida ativa PGFN ({natureza.get('descricao', '')}) — "
+                                        f"inscrição {debito.get('inscricao', '')}"
+                                    ),
+                                    valor=debito.get("valor_divida"),
+                                    vencimento=None,
+                                    pago=False,
+                                )
+                            )
+            except ConsultaDebitosError:
+                pass
+
+            try:
+                dados_fgts = consultar_regularidade_fgts(cnpj, self.token)
+                situacao = (dados_fgts.get("situacao") or "").strip()
+                if situacao and situacao.upper() != "REGULAR":
+                    findings.append(
+                        RawFinding(
+                            cnpj=cnpj,
+                            esfera="federal",
+                            tipo="pendencia",
+                            descricao=f"FGTS irregular (CRF — Caixa): {situacao}",
+                            valor=None,
+                            vencimento=None,
+                            pago=False,
+                        )
+                    )
+            except ConsultaDebitosError:
+                pass
+
+            try:
+                dados_cndt = consultar_cndt_trabalhista(cnpj, self.token)
+                if dados_cndt.get("consta"):
+                    total = dados_cndt.get("total_de_processos")
+                    descricao = "Débito trabalhista identificado (CNDT/TST)"
+                    if total:
+                        descricao += f" — {total} processo(s)"
+                    findings.append(
+                        RawFinding(
+                            cnpj=cnpj,
+                            esfera="federal",
+                            tipo="pendencia",
+                            descricao=descricao,
+                            valor=None,
+                            vencimento=None,
+                            pago=False,
+                        )
+                    )
+            except ConsultaDebitosError:
+                pass
+
+            result[cnpj] = findings
+
+        return result
+
+
 class SerproIntegraContadorProvider:
     """Ponto de extensão pra integração real — não implementado.
 

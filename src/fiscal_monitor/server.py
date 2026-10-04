@@ -17,7 +17,7 @@ from flask import Flask, Response, after_this_request, jsonify, redirect, render
 from src.common.web_styles import page
 from src.common.webauth import admin_authenticated, cron_authorized, require_admin
 from src.fiscal_monitor import monitor, storage
-from src.fiscal_monitor.cron import check_all_tenants
+from src.fiscal_monitor.cron import check_all_tenants, run_infosimples_semanal
 from src.fiscal_monitor.infosimples import (
     ConsultaDebitosError,
     consultar_cnd_federal,
@@ -62,6 +62,7 @@ _TENANTS_TEMPLATE = page("Monitoramento Fiscal", """
   <a href="/admin/usuarios">Usuários da equipe</a>
   <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
   <a href="/admin/pgfn-dados-abertos">Dados Abertos da PGFN</a>
+  <a href="/admin/check-all/rodar-agora">Rodar checagem da carteira agora</a>
   <a href="/admin/status">Status do sistema</a>
 </nav>
 <table>
@@ -75,6 +76,50 @@ _TENANTS_TEMPLATE = page("Monitoramento Fiscal", """
 {% endfor %}
 </table>
 <p><small><a href="/privacidade">Política de Privacidade e LGPD</a></small></p>
+""")
+
+_CHECK_ALL_RODAR_AGORA_TEMPLATE = page("Rodar checagem da carteira", """
+<p><a href="/tenants">&larr; voltar</a></p>
+<h1>Rodar checagem da carteira agora</h1>
+<p>Roda o motor de alerta (achados vencendo, sublimite do Simples) de todos os escritórios e dispara
+WhatsApp/e-mail pra quem tem contato configurado — o mesmo que o cron diário faz.</p>
+<p>A busca automática via InfoSimples (CND, dívida ativa, FGTS, CNDT) só roda às segundas-feiras por
+padrão, pra controlar o custo. Marque a opção abaixo pra forçar fora do dia normal.</p>
+<form method="post" class="card">
+  <label><input type="checkbox" name="forcar_infosimples"> Forçar busca InfoSimples agora (mesmo não sendo segunda)</label>
+  <button type="submit">Rodar agora</button>
+</form>
+
+{% if resultado %}
+<h2>Resultado</h2>
+<table>
+<tr><th>Escritórios verificados</th><td>{{ resultado.tenants_verificados }}</td></tr>
+<tr><th>Busca InfoSimples rodou</th><td>{{ "sim" if resultado.infosimples_semanal_rodou else "não" }}</td></tr>
+</table>
+{% if resultado.infosimples_semanal_resultado %}
+<h3>Achados da busca InfoSimples</h3>
+<table>
+<tr><th>CNPJ</th><th>Achados</th><th>Erro</th></tr>
+{% for r in resultado.infosimples_semanal_resultado %}
+<tr><td>{{ r.cnpj }}</td><td>{{ r.achados }}</td><td>{{ r.erro or "-" }}</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+<h3>Alertas por escritório</h3>
+<table>
+<tr><th>Escritório</th><th>Alertas</th><th>Sublimite</th><th>WhatsApp</th><th>E-mail</th><th>Erro</th></tr>
+{% for r in resultado.resultados %}
+<tr>
+  <td>{{ r.nome }}</td>
+  <td>{{ r.alertas }}</td>
+  <td>{{ r.sublimite_alertas }}</td>
+  <td>{{ "sim" if r.enviado_whatsapp else "não" }}</td>
+  <td>{{ "sim" if r.enviado_email else "não" }}</td>
+  <td>{{ r.erro or "-" }}</td>
+</tr>
+{% endfor %}
+</table>
+{% endif %}
 """)
 
 _TENANT_DETAIL_TEMPLATE = page("{{ tenant.nome }}", """
@@ -474,14 +519,58 @@ def create_app(
     def health():
         return jsonify({"status": "ok"})
 
+    def _rodar_check_all(conn, forcar_infosimples: bool = False) -> dict:
+        """Corpo de verdade do check diário — chamado tanto pelo cron
+        (`/cron/check-all`) quanto pelo botão manual de admin, igual ao
+        padrão já usado pra campanhas (`_executar_campanha_diaria`).
+
+        A busca via InfoSimples só roda às segundas-feiras por padrão
+        (gate por `weekday() == 0`, mesmo padrão do relatório semanal de
+        campanhas) — fica achado novo pronto antes de `check_all_tenants`
+        rodar o motor de alerta logo em seguida, então um achado que a
+        InfoSimples trouxe hoje já sai no mesmo WhatsApp/e-mail.
+        `forcar_infosimples=True` (só o botão manual oferece isso) ignora
+        o dia da semana — útil pra rodar fora de segunda sem esperar.
+        """
+        infosimples_token = os.environ.get("INFOSIMPLES_API_TOKEN")
+        infosimples_resultado = None
+        if infosimples_token and (forcar_infosimples or date.today().weekday() == 0):
+            infosimples_resultado = run_infosimples_semanal(conn, infosimples_token)
+
+        resultados = check_all_tenants(conn)
+        return {
+            "tenants_verificados": len(resultados),
+            "resultados": resultados,
+            "infosimples_semanal_rodou": infosimples_resultado is not None,
+            "infosimples_semanal_resultado": infosimples_resultado,
+        }
+
     @app.route("/cron/check-all", methods=["GET", "POST"])
     def cron_check_all():
         if not cron_authorized():
             return jsonify({"error": "não autorizado — CRON_SECRET ausente ou incorreto"}), 401
         conn = _connect()
-        resultados = check_all_tenants(conn)
+        resultado = _rodar_check_all(conn)
         conn.close()
-        return jsonify({"tenants_verificados": len(resultados), "resultados": resultados})
+        return jsonify(resultado)
+
+    @app.get("/admin/check-all/rodar-agora")
+    def check_all_rodar_agora_form():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+        return render_template_string(_CHECK_ALL_RODAR_AGORA_TEMPLATE, resultado=None)
+
+    @app.post("/admin/check-all/rodar-agora")
+    def check_all_rodar_agora():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+        forcar_infosimples = request.form.get("forcar_infosimples") == "on"
+        conn = _connect()
+        resultado = _rodar_check_all(conn, forcar_infosimples=forcar_infosimples)
+        conn.close()
+        return render_template_string(_CHECK_ALL_RODAR_AGORA_TEMPLATE, resultado=resultado)
 
     @app.get("/privacidade")
     def privacidade():

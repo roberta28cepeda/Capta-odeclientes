@@ -534,6 +534,81 @@ def test_cron_check_all_accepts_bearer_header(app, monkeypatch):
     assert response.status_code == 200
 
 
+def test_cron_check_all_skips_infosimples_without_token(app, monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "segredo-certo")
+    monkeypatch.delenv("INFOSIMPLES_API_TOKEN", raising=False)
+    response = app.test_client().get("/cron/check-all?secret=segredo-certo")
+    assert response.status_code == 200
+    assert response.get_json()["infosimples_semanal_rodou"] is False
+
+
+def test_cron_check_all_runs_infosimples_on_monday(app, monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "segredo-certo")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    import datetime
+
+    with patch("src.fiscal_monitor.server.date") as mock_date, patch(
+        "src.fiscal_monitor.server.run_infosimples_semanal", return_value=[{"cnpj": "x", "achados": 0, "erro": None}]
+    ) as mock_run:
+        mock_date.today.return_value = datetime.date(2026, 10, 5)  # segunda-feira
+        response = app.test_client().get("/cron/check-all?secret=segredo-certo")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["infosimples_semanal_rodou"] is True
+    mock_run.assert_called_once()
+
+
+def test_cron_check_all_skips_infosimples_on_non_monday(app, monkeypatch):
+    monkeypatch.setenv("CRON_SECRET", "segredo-certo")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    import datetime
+
+    with patch("src.fiscal_monitor.server.date") as mock_date, patch(
+        "src.fiscal_monitor.server.run_infosimples_semanal"
+    ) as mock_run:
+        mock_date.today.return_value = datetime.date(2026, 10, 6)  # terça-feira
+        response = app.test_client().get("/cron/check-all?secret=segredo-certo")
+
+    assert response.status_code == 200
+    assert response.get_json()["infosimples_semanal_rodou"] is False
+    mock_run.assert_not_called()
+
+
+def test_check_all_rodar_agora_requires_admin(app):
+    response = app.test_client().get("/admin/check-all/rodar-agora")
+    assert response.status_code == 401
+
+
+def test_check_all_rodar_agora_post_runs_and_shows_result(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.delenv("INFOSIMPLES_API_TOKEN", raising=False)
+    response = app.test_client().post(
+        "/admin/check-all/rodar-agora", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+    assert b"Escrit\xc3\xb3rios verificados" in response.data
+
+
+def test_check_all_rodar_agora_can_force_infosimples_outside_monday(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    import datetime
+
+    with patch("src.fiscal_monitor.server.date") as mock_date, patch(
+        "src.fiscal_monitor.server.run_infosimples_semanal", return_value=[]
+    ) as mock_run:
+        mock_date.today.return_value = datetime.date(2026, 10, 6)  # terça-feira
+        response = app.test_client().post(
+            "/admin/check-all/rodar-agora",
+            data={"forcar_infosimples": "on"},
+            headers=_basic_auth_header("admin", "senha-secreta"),
+        )
+
+    assert response.status_code == 200
+    mock_run.assert_called_once()
+
+
 def test_tenant_cannot_access_another_tenants_data_with_own_token(db_path):
     conn = storage.connect(db_path)
     tenant_a = storage.create_tenant(conn, "Escritório A")

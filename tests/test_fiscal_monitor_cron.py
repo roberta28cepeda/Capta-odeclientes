@@ -5,7 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from src.fiscal_monitor import storage
-from src.fiscal_monitor.cron import check_all_tenants
+from src.fiscal_monitor.cron import check_all_tenants, run_infosimples_semanal
 
 
 @pytest.fixture
@@ -107,3 +107,73 @@ def test_check_all_tenants_records_error_without_stopping_other_tenants(db_path,
     assert resultados[0]["erro"] == "falha na API"
     assert resultados[1]["erro"] is None
     assert resultados[1]["enviado_whatsapp"] is True
+
+
+def test_run_infosimples_semanal_applies_snapshot_per_cnpj(db_path):
+    conn = storage.connect(db_path)
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    with patch(
+        "src.fiscal_monitor.infosimples.consultar_cnd_federal",
+        return_value={"debitos_pgfn": True, "debitos_rfb": False, "tipo": "Positiva", "validade_data": ""},
+    ), patch("src.fiscal_monitor.infosimples.consultar_lista_devedores", return_value=None), patch(
+        "src.fiscal_monitor.infosimples.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.infosimples.consultar_cndt_trabalhista", return_value={"consta": False}):
+        resultados = run_infosimples_semanal(conn, "TOKEN123")
+
+    assert resultados == [{"tenant_id": tenant.id, "cnpj_id": cnpj.id, "cnpj": cnpj.cnpj, "achados": 1, "erro": None}]
+    snapshot_id = storage.latest_snapshot_id(conn, cnpj.id)
+    findings = storage.findings_for_snapshot(conn, snapshot_id)
+    assert len(findings) == 1
+    assert findings[0].status == "nova"
+    conn.close()
+
+
+def test_run_infosimples_semanal_records_error_without_stopping_other_cnpjs(db_path):
+    conn = storage.connect(db_path)
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj1 = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+    cnpj2 = storage.upsert_cnpj(conn, tenant.id, "22.333.444/0001-55")
+
+    with patch(
+        "src.fiscal_monitor.providers.InfoSimplesFiscalProvider.fetch",
+        side_effect=[RuntimeError("falha de rede"), {"22.333.444/0001-55": []}],
+    ):
+        resultados = run_infosimples_semanal(conn, "TOKEN123")
+    conn.close()
+
+    assert len(resultados) == 2
+    assert resultados[0]["cnpj_id"] == cnpj1.id
+    assert resultados[0]["erro"] == "falha de rede"
+    assert resultados[1]["cnpj_id"] == cnpj2.id
+    assert resultados[1]["erro"] is None
+    assert resultados[1]["achados"] == 0
+
+
+def test_run_infosimples_semanal_second_run_marks_resolved_when_regularizado(db_path):
+    conn = storage.connect(db_path)
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    with patch(
+        "src.fiscal_monitor.infosimples.consultar_cnd_federal",
+        return_value={"debitos_pgfn": True, "debitos_rfb": False, "tipo": "Positiva", "validade_data": ""},
+    ), patch("src.fiscal_monitor.infosimples.consultar_lista_devedores", return_value=None), patch(
+        "src.fiscal_monitor.infosimples.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.infosimples.consultar_cndt_trabalhista", return_value={"consta": False}):
+        run_infosimples_semanal(conn, "TOKEN123")
+
+    with patch(
+        "src.fiscal_monitor.infosimples.consultar_cnd_federal",
+        return_value={"debitos_pgfn": False, "debitos_rfb": False, "tipo": "Negativa", "validade_data": ""},
+    ), patch("src.fiscal_monitor.infosimples.consultar_lista_devedores", return_value=None), patch(
+        "src.fiscal_monitor.infosimples.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.infosimples.consultar_cndt_trabalhista", return_value={"consta": False}):
+        run_infosimples_semanal(conn, "TOKEN123")
+
+    snapshot_id = storage.latest_snapshot_id(conn, cnpj.id)
+    findings = storage.findings_for_snapshot(conn, snapshot_id)
+    conn.close()
+    assert len(findings) == 1
+    assert findings[0].status == "resolvida"

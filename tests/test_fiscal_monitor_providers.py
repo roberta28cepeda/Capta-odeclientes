@@ -5,7 +5,11 @@ import tempfile
 import pytest
 
 from src.fiscal_monitor import storage
+from unittest.mock import patch
+
+from src.fiscal_monitor.infosimples import ConsultaDebitosError
 from src.fiscal_monitor.providers import (
+    InfoSimplesFiscalProvider,
     ManualFiscalProvider,
     SerproIntegraContadorProvider,
     import_portfolio_csv,
@@ -144,3 +148,84 @@ def test_import_portfolio_csv_skips_blank_cnpj_rows():
 
     assert erro is None
     assert count == 0
+
+
+def test_infosimples_provider_returns_empty_without_cnpjs():
+    provider = InfoSimplesFiscalProvider("TOKEN123")
+    assert provider.fetch(None) == {}
+    assert provider.fetch([]) == {}
+
+
+def test_infosimples_provider_flags_debitos_and_divida_ativa():
+    provider = InfoSimplesFiscalProvider("TOKEN123")
+    with patch(
+        "src.fiscal_monitor.infosimples.consultar_cnd_federal",
+        return_value={"debitos_pgfn": True, "debitos_rfb": False, "tipo": "Positiva", "validade_data": "11/11/2026"},
+    ), patch(
+        "src.fiscal_monitor.infosimples.consultar_lista_devedores",
+        return_value={
+            "naturezas_debitos": [
+                {"descricao": "FGTS", "debitos": [{"inscricao": "FGAL1", "valor_divida": 7359.68}]}
+            ]
+        },
+    ), patch("src.fiscal_monitor.infosimples.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}), patch(
+        "src.fiscal_monitor.infosimples.consultar_cndt_trabalhista", return_value={"consta": False}
+    ):
+        resultado = provider.fetch(["11.222.333/0001-44"])
+
+    findings = resultado["11.222.333/0001-44"]
+    tipos_descricoes = [(f.tipo, f.descricao) for f in findings]
+    assert ("pendencia", "Débito ativo identificado na CND federal (Receita Federal/PGFN)") in tipos_descricoes
+    assert ("cnd", "Certidão Positiva") in tipos_descricoes
+    cnd_finding = next(f for f in findings if f.tipo == "cnd")
+    assert cnd_finding.vencimento == "2026-11-11"
+    divida_finding = next(f for f in findings if "inscrição FGAL1" in f.descricao)
+    assert divida_finding.valor == 7359.68
+
+
+def test_infosimples_provider_flags_fgts_irregular_e_cndt_com_debito():
+    provider = InfoSimplesFiscalProvider("TOKEN123")
+    with patch(
+        "src.fiscal_monitor.infosimples.consultar_cnd_federal",
+        return_value={"debitos_pgfn": False, "debitos_rfb": False, "tipo": "Negativa", "validade_data": ""},
+    ), patch("src.fiscal_monitor.infosimples.consultar_lista_devedores", return_value=None), patch(
+        "src.fiscal_monitor.infosimples.consultar_regularidade_fgts", return_value={"situacao": "IRREGULAR"}
+    ), patch(
+        "src.fiscal_monitor.infosimples.consultar_cndt_trabalhista",
+        return_value={"consta": True, "total_de_processos": 2},
+    ):
+        resultado = provider.fetch(["11.222.333/0001-44"])
+
+    descricoes = [f.descricao for f in resultado["11.222.333/0001-44"]]
+    assert any("FGTS irregular" in d for d in descricoes)
+    assert any("CNDT/TST" in d and "2 processo" in d for d in descricoes)
+
+
+def test_infosimples_provider_sem_achados_quando_tudo_regular():
+    provider = InfoSimplesFiscalProvider("TOKEN123")
+    with patch(
+        "src.fiscal_monitor.infosimples.consultar_cnd_federal",
+        return_value={"debitos_pgfn": False, "debitos_rfb": False, "tipo": "Negativa", "validade_data": ""},
+    ), patch("src.fiscal_monitor.infosimples.consultar_lista_devedores", return_value=None), patch(
+        "src.fiscal_monitor.infosimples.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.infosimples.consultar_cndt_trabalhista", return_value={"consta": False}):
+        resultado = provider.fetch(["11.222.333/0001-44"])
+
+    assert resultado["11.222.333/0001-44"] == []
+
+
+def test_infosimples_provider_uma_consulta_falhar_nao_impede_as_outras():
+    provider = InfoSimplesFiscalProvider("TOKEN123")
+    with patch(
+        "src.fiscal_monitor.infosimples.consultar_cnd_federal", side_effect=ConsultaDebitosError("saldo insuficiente")
+    ), patch(
+        "src.fiscal_monitor.infosimples.consultar_lista_devedores",
+        return_value={"naturezas_debitos": [{"descricao": "FGTS", "debitos": [{"inscricao": "X1", "valor_divida": 100.0}]}]},
+    ), patch("src.fiscal_monitor.infosimples.consultar_regularidade_fgts", side_effect=ConsultaDebitosError("erro")), patch(
+        "src.fiscal_monitor.infosimples.consultar_cndt_trabalhista", return_value={"consta": False}
+    ):
+        resultado = provider.fetch(["11.222.333/0001-44"])
+
+    findings = resultado["11.222.333/0001-44"]
+    assert len(findings) == 1
+    assert "inscrição X1" in findings[0].descricao

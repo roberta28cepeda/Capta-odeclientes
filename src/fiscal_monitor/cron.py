@@ -14,6 +14,7 @@ import os
 from datetime import date
 
 from src.fiscal_monitor import alerts, monitor, storage
+from src.fiscal_monitor.providers import InfoSimplesFiscalProvider
 
 
 def check_all_tenants(
@@ -66,4 +67,30 @@ def check_all_tenants(
         except Exception as exc:
             resultado["erro"] = str(exc)
         resultados.append(resultado)
+    return resultados
+
+
+def run_infosimples_semanal(conn, token: str) -> list[dict]:
+    """Busca achados via InfoSimples (CND federal, dívida ativa/PGFN, FGTS,
+    CNDT) pra cada CNPJ de cada tenant e aplica como novo snapshot —
+    pensado pra rodar uma vez por semana (o chamador decide o dia; ver o
+    gate em `server.cron_check_all`), não todo dia, porque cada consulta
+    tem custo.
+
+    Só alimenta o motor de diff (acha achado NOVA/RECORRENTE/RESOLVIDA) —
+    não dispara alerta sozinho. Quem dispara é `check_all_tenants`,
+    chamado logo depois no mesmo cron, que já lê o snapshot recém-salvo.
+    """
+    provider = InfoSimplesFiscalProvider(token)
+    resultados = []
+    for tenant in storage.list_tenants(conn):
+        for cnpj in storage.list_cnpjs(conn, tenant.id):
+            resultado = {"tenant_id": tenant.id, "cnpj_id": cnpj.id, "cnpj": cnpj.cnpj, "achados": 0, "erro": None}
+            try:
+                raw_findings = provider.fetch([cnpj.cnpj]).get(cnpj.cnpj, [])
+                saved = monitor.apply_snapshot(conn, cnpj, provider.name, raw_findings)
+                resultado["achados"] = len(saved)
+            except Exception as exc:
+                resultado["erro"] = str(exc)
+            resultados.append(resultado)
     return resultados
