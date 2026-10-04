@@ -32,7 +32,7 @@ from src.fiscal_monitor.infosimples import (
     montar_situacao_fiscal,
 )
 from src.fiscal_monitor.pgfn_dados_abertos import ArquivoDadosAbertosError, importar_arquivo
-from src.fiscal_monitor.pdf import render_pre_analise_pdf
+from src.fiscal_monitor.pdf import render_dossie_fiscal_pdf, render_pre_analise_pdf
 from src.fiscal_monitor.preanalise import (
     CartaoCnpjError,
     ConsultaCnpjError,
@@ -190,6 +190,11 @@ _CERTIDOES_TEMPLATE = page("Certidões — {{ cnpj.cnpj }}", """
 <h1>Certidões — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
 <p>Órgãos exigidos pra essa empresa (UF: {{ cnpj.uf or "não informada" }}): {{ orgaos|join(", ") }}</p>
 {% if certidoes %}<p><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/certidoes/unificado.pdf?token={{ request.args.get('token', '') }}">Baixar todas em um único PDF &rarr;</a></p>{% endif %}
+
+<h2>Dossiê fiscal automático</h2>
+<p>Consulta ao vivo na InfoSimples (CND federal, dívida ativa/PGFN, FGTS e CNDT) e gera um único PDF —
+não precisa upload manual. Cada consulta tem custo.</p>
+<p><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/certidoes/dossie-fiscal.pdf?token={{ request.args.get('token', '') }}">Baixar dossiê fiscal automático (PDF) &rarr;</a></p>
 
 <h2>Enviar certidão (PDF real)</h2>
 <form method="post" enctype="multipart/form-data" class="card">
@@ -1038,6 +1043,89 @@ def create_app(
         return Response(
             buffer.read(), mimetype="application/pdf",
             headers={"Content-Disposition": f"attachment; filename=certidoes_{only_digits(cnpj.cnpj)}.pdf"},
+        )
+
+    @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/certidoes/dossie-fiscal.pdf")
+    def dossie_fiscal_automatico(tenant_id: int, cnpj_id: int):
+        """Dossiê fiscal automático: consulta ao vivo na InfoSimples (CND
+        federal, dívida ativa/PGFN, FGTS, CNDT) pra um CNPJ já na carteira
+        e devolve tudo consolidado num único PDF — sem precisar de upload
+        manual de cada certidão (diferente de `/certidoes/unificado.pdf`,
+        que só junta o que já foi enviado).
+        """
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+        conn.close()
+
+        token = os.environ.get("INFOSIMPLES_API_TOKEN")
+        if not token:
+            return jsonify({"error": "INFOSIMPLES_API_TOKEN não configurado — não é possível buscar automaticamente."}), 400
+
+        situacao_fiscal = None
+        divida_ativa = None
+        situacao_fgts = None
+        situacao_cndt = None
+        alertas: list[str] = []
+
+        try:
+            situacao_fiscal = montar_situacao_fiscal(consultar_cnd_federal(cnpj.cnpj, token))
+        except ConsultaDebitosError as exc:
+            alertas.append(f"Não foi possível consultar CND federal (Receita Federal/PGFN): {exc}")
+
+        try:
+            divida_ativa = montar_divida_ativa(consultar_lista_devedores(cnpj.cnpj, token))
+            if divida_ativa:
+                conn = _connect()
+                try:
+                    divida_ativa = enriquecer_com_dados_abertos(conn, divida_ativa)
+                finally:
+                    conn.close()
+        except ConsultaDebitosError as exc:
+            alertas.append(f"Não foi possível consultar lista de devedores da PGFN: {exc}")
+
+        try:
+            situacao_fgts = montar_situacao_fgts(consultar_regularidade_fgts(cnpj.cnpj, token))
+        except ConsultaDebitosError as exc:
+            alertas.append(f"Não foi possível consultar regularidade do FGTS (Caixa): {exc}")
+
+        try:
+            situacao_cndt = montar_situacao_cndt(consultar_cndt_trabalhista(cnpj.cnpj, token))
+        except ConsultaDebitosError as exc:
+            alertas.append(f"Não foi possível consultar CNDT (débitos trabalhistas): {exc}")
+
+        alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt)
+
+        fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        render_dossie_fiscal_pdf(
+            cnpj,
+            tenant,
+            alertas,
+            pdf_path,
+            gerado_em=date.today().isoformat(),
+            situacao_fiscal=situacao_fiscal,
+            divida_ativa=divida_ativa,
+            situacao_fgts=situacao_fgts,
+            situacao_cndt=situacao_cndt,
+        )
+
+        @after_this_request
+        def _cleanup(response):
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
+            return response
+
+        return send_file(
+            pdf_path,
+            as_attachment=True,
+            download_name=f"dossie_fiscal_{only_digits(cnpj.cnpj)}.pdf",
+            mimetype="application/pdf",
         )
 
     @app.get("/reforma-tributaria")

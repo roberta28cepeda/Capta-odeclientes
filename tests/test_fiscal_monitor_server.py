@@ -779,6 +779,69 @@ def test_baixar_certidoes_unificado_404_without_certidoes(app):
     assert response.status_code == 404
 
 
+def test_dossie_fiscal_automatico_requires_tenant_auth(app):
+    tenant_id = app.config["_tenant_id"]
+    cnpj_id = app.config["_cnpj_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/certidoes/dossie-fiscal.pdf")
+    assert response.status_code == 403
+
+
+def test_dossie_fiscal_automatico_requires_infosimples_token(app):
+    response = app.test_client().get(_cnpj_url(app, "/certidoes/dossie-fiscal.pdf"))
+    assert response.status_code == 400
+    assert b"INFOSIMPLES_API_TOKEN" in response.data
+
+
+def test_dossie_fiscal_automatico_calls_all_four_consultas_and_returns_pdf(app, monkeypatch):
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+
+    with patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal",
+        return_value={"tipo": "Negativa", "debitos_pgfn": False, "debitos_rfb": False},
+    ) as mock_cnd, patch(
+        "src.fiscal_monitor.server.consultar_lista_devedores", return_value=None
+    ) as mock_devedores, patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ) as mock_fgts, patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ) as mock_cndt:
+        response = app.test_client().get(_cnpj_url(app, "/certidoes/dossie-fiscal.pdf"))
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    mock_cnd.assert_called_once_with("11.222.333/0001-44", "TOKEN123")
+    mock_devedores.assert_called_once_with("11.222.333/0001-44", "TOKEN123")
+    mock_fgts.assert_called_once_with("11.222.333/0001-44", "TOKEN123")
+    mock_cndt.assert_called_once_with("11.222.333/0001-44", "TOKEN123")
+
+
+def test_dossie_fiscal_automatico_cnd_falha_nao_bloqueia_as_demais(app, monkeypatch):
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    devedores_response = {
+        "total_divida": 7359.68,
+        "total_tributario": 0.0,
+        "total_nao_tributario": 7359.68,
+        "naturezas_debitos": [
+            {"descricao": "FGTS", "total": 7359.68, "debitos": [{"inscricao": "FGAL1", "valor_divida": 7359.68}]}
+        ],
+    }
+    with patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal",
+        side_effect=ConsultaDebitosError("código 611: dados incompletos na origem"),
+    ), patch(
+        "src.fiscal_monitor.server.consultar_lista_devedores", return_value=devedores_response
+    ) as mock_devedores, patch(
+        "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
+    ), patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
+        response = app.test_client().get(_cnpj_url(app, "/certidoes/dossie-fiscal.pdf"))
+
+    assert response.status_code == 200
+    assert response.mimetype == "application/pdf"
+    mock_devedores.assert_called_once_with("11.222.333/0001-44", "TOKEN123")
+
+
 def test_reforma_tributaria_requires_admin(app):
     response = app.test_client().get("/reforma-tributaria")
     assert response.status_code == 401

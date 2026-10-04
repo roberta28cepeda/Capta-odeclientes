@@ -9,7 +9,7 @@ from src.fiscal_monitor.infosimples import (
     SituacaoFgts,
     SituacaoFiscalPgfn,
 )
-from src.fiscal_monitor.pdf import render_pre_analise_pdf, render_portfolio_report
+from src.fiscal_monitor.pdf import render_dossie_fiscal_pdf, render_pre_analise_pdf, render_portfolio_report
 from src.fiscal_monitor.preanalise import PreAnalise
 from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
 
@@ -115,6 +115,61 @@ def test_render_pre_analise_pdf_includes_fgts_e_cndt():
             path,
             situacao_fgts=situacao_fgts,
             situacao_cndt=situacao_cndt,
+        )
+
+        assert os.path.exists(path)
+        assert os.path.getsize(path) > 0
+        with open(path, "rb") as f:
+            assert f.read(4) == b"%PDF"
+
+
+def test_render_dossie_fiscal_pdf_creates_nonempty_file():
+    situacao_fiscal = SituacaoFiscalPgfn(
+        conseguiu_certidao_negativa=True,
+        tipo_certidao="Negativa",
+        debitos_pgfn=False,
+        debitos_rfb=False,
+        mensagem="CERTIDÃO NEGATIVA...",
+        validade_data="11/11/2026",
+    )
+    situacao_fgts = SituacaoFgts(situacao="REGULAR", validade_inicio_data="01/01/2026", validade_fim_data="31/01/2026")
+    situacao_cndt = SituacaoCndt(consta_debito=False, total_processos=0, certidao_codigo="123456", validade_data="11/11/2026")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "dossie_fiscal.pdf")
+        render_dossie_fiscal_pdf(
+            CNPJ_COM_ACHADO,
+            TENANT,
+            [],
+            path,
+            gerado_em="2026-10-04",
+            situacao_fiscal=situacao_fiscal,
+            situacao_fgts=situacao_fgts,
+            situacao_cndt=situacao_cndt,
+        )
+
+        assert os.path.exists(path)
+        assert os.path.getsize(path) > 0
+        with open(path, "rb") as f:
+            assert f.read(4) == b"%PDF"
+
+
+def test_render_dossie_fiscal_pdf_with_alertas_and_divida_ativa():
+    divida_ativa = DividaAtivaPgfn(
+        total_divida=7359.68,
+        total_tributario=7359.68,
+        total_nao_tributario=0.0,
+        naturezas=[NaturezaDebito(descricao="FGTS", total=7359.68, debitos=[])],
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "dossie_fiscal_divida.pdf")
+        render_dossie_fiscal_pdf(
+            CNPJ_COM_ACHADO,
+            TENANT,
+            ["Inscrito na Lista de Devedores da PGFN."],
+            path,
+            divida_ativa=divida_ativa,
         )
 
         assert os.path.exists(path)

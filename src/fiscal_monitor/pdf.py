@@ -82,6 +82,100 @@ def render_portfolio_report(
     new_document(output_path).build(story)
 
 
+def render_dossie_fiscal_pdf(
+    cnpj: Cnpj,
+    tenant: Tenant,
+    alertas: list[str],
+    output_path: str,
+    gerado_em: str | None = None,
+    situacao_fiscal: SituacaoFiscalPgfn | None = None,
+    divida_ativa: DividaAtivaPgfn | None = None,
+    situacao_fgts: SituacaoFgts | None = None,
+    situacao_cndt: SituacaoCndt | None = None,
+) -> None:
+    """Dossiê consolidado de situação fiscal de um CNPJ já na carteira do
+    escritório (diferente de `render_pre_analise_pdf`, que é pro fluxo de
+    prospecção de lead) — reúne numa única PDF tudo que foi consultado ao
+    vivo na InfoSimples (CND federal, dívida ativa/PGFN, FGTS, CNDT).
+    """
+
+    def _sim_nao(valor: bool | None) -> str:
+        if valor is None:
+            return "não informado"
+        return "sim" if valor else "não"
+
+    story = [
+        Paragraph("Dossiê de Situação Fiscal", TITLE_STYLE),
+        Paragraph(f"Preparado por {tenant.nome}", BODY_STYLE),
+        Spacer(1, 12),
+        Paragraph(f"{cnpj.razao_social or cnpj.cnpj} ({cnpj.cnpj})", HEADING_STYLE),
+    ]
+    if gerado_em:
+        story.append(Paragraph(f"Consulta realizada em: {gerado_em}", BODY_STYLE))
+
+    if situacao_fiscal is not None:
+        story.append(Paragraph("Situação Fiscal (Receita Federal/PGFN)", HEADING_STYLE))
+        story.append(Paragraph(f"Certidão: {situacao_fiscal.tipo_certidao or '-'}", BODY_STYLE))
+        story.append(Paragraph(f"Débitos na Receita Federal: {_sim_nao(situacao_fiscal.debitos_rfb)}", BODY_STYLE))
+        story.append(Paragraph(f"Débitos na PGFN: {_sim_nao(situacao_fiscal.debitos_pgfn)}", BODY_STYLE))
+        if situacao_fiscal.validade_data:
+            story.append(Paragraph(f"Validade da certidão: {situacao_fiscal.validade_data}", BODY_STYLE))
+
+    if divida_ativa is not None:
+        story.append(Paragraph("Dívida Ativa da União (Lista de Devedores PGFN)", HEADING_STYLE))
+        story.append(Paragraph(f"Total da dívida: R$ {formatar_valor_brl(divida_ativa.total_divida)}", BODY_STYLE))
+        story.append(
+            Paragraph(
+                f"Tributário: R$ {formatar_valor_brl(divida_ativa.total_tributario)} · "
+                f"Não tributário: R$ {formatar_valor_brl(divida_ativa.total_nao_tributario)}",
+                BODY_STYLE,
+            )
+        )
+        for natureza in divida_ativa.naturezas:
+            story.append(Paragraph(f"• {natureza.descricao}: R$ {formatar_valor_brl(natureza.total)}", BULLET_STYLE))
+            for debito in natureza.debitos:
+                detalhe = f"Inscrição {debito.inscricao}: R$ {formatar_valor_brl(debito.valor_divida)}"
+                if debito.data_inscricao:
+                    detalhe += f" · inscrita em {debito.data_inscricao} · {debito.situacao_inscricao}"
+                story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;- {detalhe}", BULLET_STYLE))
+
+    if situacao_fgts is not None:
+        story.append(Paragraph("Regularidade do FGTS (Caixa)", HEADING_STYLE))
+        story.append(Paragraph(f"Situação: {situacao_fgts.situacao or '-'}", BODY_STYLE))
+        if situacao_fgts.validade_fim_data:
+            story.append(
+                Paragraph(
+                    f"Validade: {situacao_fgts.validade_inicio_data or '-'} a {situacao_fgts.validade_fim_data}",
+                    BODY_STYLE,
+                )
+            )
+
+    if situacao_cndt is not None:
+        story.append(Paragraph("Débitos Trabalhistas (CNDT/TST)", HEADING_STYLE))
+        story.append(Paragraph(f"Consta débito/processo trabalhista: {_sim_nao(situacao_cndt.consta_debito)}", BODY_STYLE))
+        if situacao_cndt.total_processos:
+            story.append(Paragraph(f"Total de processos: {situacao_cndt.total_processos}", BODY_STYLE))
+
+    story.append(Paragraph("Alertas", ALERT_HEADING_STYLE))
+    for alerta in alertas:
+        story.append(Paragraph(f"• {alerta}", BULLET_STYLE))
+    if not alertas:
+        story.append(Paragraph("Nenhum alerta identificado nas consultas realizadas.", BODY_STYLE))
+
+    story.append(Spacer(1, 16))
+    story.append(
+        Paragraph(
+            "Este dossiê consolida, numa única página, o resultado de consultas públicas realizadas "
+            "ao vivo via InfoSimples na data acima (situação fiscal/PGFN, dívida ativa, FGTS e CNDT). "
+            "Ele não substitui a certidão oficial emitida por cada órgão — pra anexar a via oficial em "
+            "PDF (ex.: pra apresentar a terceiros), use o envio manual na aba de certidões.",
+            BODY_STYLE,
+        )
+    )
+
+    new_document(output_path).build(story)
+
+
 def render_pre_analise_pdf(
     analise: PreAnalise,
     alertas: list[str],
