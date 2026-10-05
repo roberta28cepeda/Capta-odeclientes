@@ -53,18 +53,43 @@ from werkzeug.security import generate_password_hash
 
 from src.campaigns import storage as campaigns_storage
 
-_TENANTS_TEMPLATE = page("Monitoramento Fiscal", """
-<h1>Escritórios monitorados</h1>
-<nav class="nav">
-  <a href="/admin/tenants/novo">+ Cadastrar novo escritório</a>
-  <a href="/pre-analise">Gerar pré-análise (só CNPJ, sem procuração)</a>
-  <a href="/admin/campanhas/leads">Campanhas de prospecção</a>
-  <a href="/admin/usuarios">Usuários da equipe</a>
-  <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
-  <a href="/admin/pgfn-dados-abertos">Dados Abertos da PGFN</a>
-  <a href="/admin/check-all/rodar-agora">Rodar checagem da carteira agora</a>
-  <a href="/admin/status">Status do sistema</a>
-</nav>
+_TENANTS_TEMPLATE = page("Capta", """
+<h1>Capta</h1>
+<p class="lede">Três módulos independentes: captação de leads, qualificação de quem responde, e gestão
+completa da carteira depois que o cliente fecha.</p>
+
+<div class="module-grid">
+  <section class="module-card">
+    <h2>1. Captação</h2>
+    <p class="module-desc">E-mail e WhatsApp diários por tese, follow-up, sincronização com a Brevo,
+    relatório semanal de KPIs.</p>
+    <nav class="nav">
+      <a href="/admin/campanhas/leads">Campanhas de prospecção</a>
+    </nav>
+  </section>
+
+  <section class="module-card">
+    <h2>2. Qualificação</h2>
+    <p class="module-desc">Lead respondeu? Busca CND, dívida ativa, FGTS e CNDT na hora e gera o PDF
+    pra levar pra reunião.</p>
+    <nav class="nav">
+      <a href="/pre-analise">Gerar pré-análise</a>
+    </nav>
+  </section>
+
+  <section class="module-card">
+    <h2>3. Carteira</h2>
+    <p class="module-desc">Cliente fechou contrato — controle total: obrigações, certidões, alertas
+    automáticos por WhatsApp/e-mail.</p>
+    <nav class="nav">
+      <a href="/admin/tenants/novo">+ Cadastrar novo escritório</a>
+      <a href="/admin/pgfn-dados-abertos">Dados Abertos da PGFN</a>
+      <a href="/admin/check-all/rodar-agora">Rodar checagem agora</a>
+    </nav>
+  </section>
+</div>
+
+<h2>Escritórios na carteira</h2>
 <table>
 <tr><th>ID</th><th>Nome</th><th>CNPJs na carteira</th></tr>
 {% for tenant, count in tenants %}
@@ -75,6 +100,14 @@ _TENANTS_TEMPLATE = page("Monitoramento Fiscal", """
 </tr>
 {% endfor %}
 </table>
+
+<h2>Administração</h2>
+<nav class="nav">
+  <a href="/admin/usuarios">Usuários da equipe</a>
+  <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
+  <a href="/admin/status">Status do sistema</a>
+</nav>
+
 <p><small><a href="/privacidade">Política de Privacidade e LGPD</a></small></p>
 """)
 

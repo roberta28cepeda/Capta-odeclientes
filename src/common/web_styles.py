@@ -39,6 +39,12 @@ BASE_STYLE = """
     padding: .4rem .9rem; border-radius: 999px; font-size: .88rem; color: var(--text);
   }
   .nav a:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+  .lede { color: var(--text-muted); margin: 0 0 1.5rem; max-width: 60ch; }
+  .module-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .module-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem 1.5rem; }
+  .module-card h2 { margin: 0 0 .4rem; font-size: 1rem; }
+  .module-card .module-desc { color: var(--text-muted); font-size: .85rem; min-height: 2.6em; margin: 0 0 1rem; }
+  .module-card .nav { margin: 0; }
   .tabs { margin: .5rem 0 1.5rem; }
   .tabs a { margin-right: .75rem; font-size: .92rem; }
   .tabs a.ativa { font-weight: 700; color: var(--accent-dark); }

@@ -252,7 +252,7 @@ def test_cron_campanhas_runs_and_sends_pending_leads(app, monkeypatch, campaigns
 
     with patch("src.campaigns.engine.send_email_html") as mock_send, patch(
         "src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None
-    ):
+    ), patch("src.campaigns.engine.enviar_relatorio_semanal"):
         response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
 
     assert response.status_code == 200
@@ -261,6 +261,44 @@ def test_cron_campanhas_runs_and_sends_pending_leads(app, monkeypatch, campaigns
     assert data["busca_email"] is None
     assert data["busca_telefone"] == {"leads_verificados": 1, "encontrados": 0, "erros": []}
     mock_send.assert_called_once()
+
+
+def test_cron_campanhas_sends_relatorio_semanal_on_monday(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+    import datetime
+
+    with patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None), patch(
+        "src.campaigns.routes.date"
+    ) as mock_date, patch("src.campaigns.engine.enviar_relatorio_semanal") as mock_relatorio:
+        mock_date.today.return_value = datetime.date(2026, 10, 5)  # segunda-feira
+        response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    assert response.status_code == 200
+    assert response.get_json()["relatorio_semanal_enviado"] is True
+    mock_relatorio.assert_called_once()
+
+
+def test_cron_campanhas_skips_relatorio_semanal_on_non_monday(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+    import datetime
+
+    with patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None), patch(
+        "src.campaigns.routes.date"
+    ) as mock_date, patch("src.campaigns.engine.enviar_relatorio_semanal") as mock_relatorio:
+        mock_date.today.return_value = datetime.date(2026, 10, 6)  # terça-feira
+        response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    assert response.status_code == 200
+    assert response.get_json()["relatorio_semanal_enviado"] is False
+    mock_relatorio.assert_not_called()
 
 
 def test_cron_campanhas_runs_email_search_when_exa_key_configured(app, monkeypatch, campaigns_db_path):
@@ -276,7 +314,9 @@ def test_cron_campanhas_runs_email_search_when_exa_key_configured(app, monkeypat
 
     with patch("src.campaigns.engine.buscar_email_por_empresa", return_value="achado@empresax.com.br") as mock_busca, patch(
         "src.campaigns.engine.send_email_html"
-    ) as mock_send, patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None):
+    ) as mock_send, patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None), patch(
+        "src.campaigns.engine.enviar_relatorio_semanal"
+    ):
         response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
 
     assert response.status_code == 200
@@ -299,7 +339,9 @@ def test_cron_campanhas_sends_whatsapp_digest_when_configured(app, monkeypatch, 
 
     with patch("src.campaigns.engine.send_email_html"), patch(
         "src.campaigns.engine.buscar_telefone_por_cnpj", return_value="11912345678"
-    ), patch("src.campaigns.engine.send_email") as mock_send_equipe:
+    ), patch("src.campaigns.engine.send_email") as mock_send_equipe, patch(
+        "src.campaigns.engine.enviar_relatorio_semanal"
+    ):
         response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
 
     assert response.status_code == 200
@@ -321,7 +363,7 @@ def test_cron_campanhas_skips_whatsapp_digest_without_env_var(app, monkeypatch, 
 
     with patch("src.campaigns.engine.send_email_html"), patch(
         "src.campaigns.engine.buscar_telefone_por_cnpj", return_value="11912345678"
-    ):
+    ), patch("src.campaigns.engine.enviar_relatorio_semanal"):
         response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
 
     data = response.get_json()
@@ -367,7 +409,7 @@ def test_rodar_agora_post_runs_and_sends_pending_leads(app, monkeypatch, campaig
 
     with patch("src.campaigns.engine.send_email_html") as mock_send, patch(
         "src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None
-    ):
+    ), patch("src.campaigns.engine.enviar_relatorio_semanal"):
         response = app.test_client().post(
             "/admin/campanhas/rodar-agora", headers=_basic_auth_header("admin", "senha-secreta")
         )
