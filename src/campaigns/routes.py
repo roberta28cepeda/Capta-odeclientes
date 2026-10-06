@@ -394,10 +394,20 @@ menos tempo, em vez de cada uma assumir sempre a mesma fatia e estourar
 o limite de verdade (foi exatamente isso que aconteceu com fatias fixas
 de 80+80+100=260s, sem sobrar margem real)."""
 
-TETO_BUSCA_SEGUNDOS = 60
-"""Teto por etapa de busca (e-mail, telefone) — enviar e-mail é a
-prioridade, então as buscas nunca usam mais que isso, mesmo que sobre bem
-mais tempo; o resto do orçamento vai todo pro envio."""
+TETO_BUSCA_EMAIL_SEGUNDOS = 150
+"""A busca de e-mail é o gargalo real hoje: a maioria dos milhares de
+leads importados ainda não tem e-mail, e sem e-mail o lead nunca entra na
+fila de envio (`leads_pendentes_por_tese` exige `lead.email`). Com os
+~3,5s por lead observados em produção, 150s processa ~40 leads por
+execução — bem mais que os ~17 de antes — sem risco de estourar o
+orçamento total, já que o envio raramente precisa de muito tempo
+enquanto esse backlog não esvazia."""
+
+TETO_BUSCA_TELEFONE_SEGUNDOS = 30
+"""Telefone não precisa de orçamento grande — a ReceitaWS tem limite de
+poucas consultas por minuto e a busca já pára sozinha no primeiro erro de
+limite (ver `buscar_telefones_pendentes`), então gastar mais tempo aqui
+não acha mais nada, só atrasa o resto."""
 
 
 def _executar_campanha_diaria() -> dict:
@@ -427,12 +437,14 @@ def _executar_campanha_diaria() -> dict:
 
     exa_api_key = os.environ.get("EXA_API_KEY")
     busca_email = (
-        engine.buscar_emails_pendentes(conn, exa_api_key, orcamento_segundos=min(TETO_BUSCA_SEGUNDOS, tempo_restante()))
+        engine.buscar_emails_pendentes(
+            conn, exa_api_key, limite=200, orcamento_segundos=min(TETO_BUSCA_EMAIL_SEGUNDOS, tempo_restante())
+        )
         if exa_api_key
         else None
     )
     busca_telefone = engine.buscar_telefones_pendentes(
-        conn, orcamento_segundos=min(TETO_BUSCA_SEGUNDOS, tempo_restante())
+        conn, orcamento_segundos=min(TETO_BUSCA_TELEFONE_SEGUNDOS, tempo_restante())
     )
 
     resultado = engine.rodar_diario(
