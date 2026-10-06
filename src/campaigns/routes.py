@@ -394,6 +394,7 @@ def _executar_campanha_diaria() -> dict:
     smtp_username = os.environ.get("SMTP_USERNAME")
     smtp_password = os.environ.get("SMTP_PASSWORD")
     if not all([smtp_host, smtp_port, smtp_username, smtp_password]):
+        print("[campanha_diaria] erro: SMTP não configurado")
         return {"error": "SMTP_HOST, SMTP_PORT, SMTP_USERNAME e SMTP_PASSWORD precisam estar configurados"}
     smtp_from = os.environ.get("SMTP_FROM")
 
@@ -426,6 +427,7 @@ def _executar_campanha_diaria() -> dict:
         relatorio_enviado = True
 
     resultado["relatorio_semanal_enviado"] = relatorio_enviado
+    print(f"[campanha_diaria] resultado={resultado}")
     return resultado
 
 
