@@ -58,12 +58,23 @@ def leads_pendentes_por_tese(conn) -> dict[str, list[tuple[Lead, str]]]:
     contato hoje (inicial ou próximo follow-up), sem aplicar limite ainda.
     """
     resultado: dict[str, list[tuple[Lead, str]]] = {}
+    total = 0
+    ativos_com_email = 0
+    sem_tipo_pendente = 0
     for lead in storage.list_leads(conn):
+        total += 1
         if lead.status != STATUS_ATIVO or not lead.email:
             continue
+        ativos_com_email += 1
         tipo = _proximo_tipo_envio(storage.envios_do_lead(conn, lead.id))
         if tipo:
             resultado.setdefault(lead.tese, []).append((lead, tipo))
+        else:
+            sem_tipo_pendente += 1
+    print(
+        f"[leads_pendentes_por_tese] total_leads={total} ativos_com_email={ativos_com_email} "
+        f"sem_tipo_pendente={sem_tipo_pendente} teses_com_pendente={list(resultado.keys())}"
+    )
     return resultado
 
 
@@ -74,9 +85,12 @@ def leads_para_enviar_hoje(conn, hoje: date | None = None) -> list[tuple[Lead, s
     """
     desde_iso = _inicio_do_dia_utc(hoje)
     resultado: list[tuple[Lead, str]] = []
-    for tese, pendentes in leads_pendentes_por_tese(conn).items():
+    pendentes_por_tese = leads_pendentes_por_tese(conn)
+    print(f"[leads_para_enviar_hoje] teses_pendentes={ {t: len(p) for t, p in pendentes_por_tese.items()} }")
+    for tese, pendentes in pendentes_por_tese.items():
         ja_enviados_hoje = storage.envios_de_hoje_por_tese(conn, tese, desde_iso)
         vagas = max(0, LIMITE_ENVIOS_POR_TESE_POR_DIA - ja_enviados_hoje)
+        print(f"[leads_para_enviar_hoje] tese={tese} pendentes={len(pendentes)} ja_enviados_hoje={ja_enviados_hoje} vagas={vagas}")
         resultado.extend(pendentes[:vagas])
     return resultado
 
