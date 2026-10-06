@@ -14,6 +14,7 @@ import csv
 import io
 import os
 from datetime import date
+from time import monotonic
 
 from flask import Blueprint, Response, current_app, jsonify, redirect, render_template_string, request
 
@@ -381,6 +382,24 @@ def track_click(token: str):
     return redirect(destino)
 
 
+TEMPO_LIMITE_TOTAL_SEGUNDOS = 240
+"""O Vercel mata a execução aos 300s de verdade (confirmado em produção
+— "Task timed out after 300 seconds"). Fica 60s de folga aqui pra
+conexão com o banco, migração de schema, resumo de WhatsApp pra equipe e
+relatório semanal — overhead que não dá pra cronometrar com precisão de
+fora. Cada etapa abaixo recebe como orçamento o que *sobrou* do tempo até
+aqui (não uma fatia fixa adivinhada) — se o banco demorou pra acordar ou
+uma API de origem está lenta, as próximas etapas recebem automaticamente
+menos tempo, em vez de cada uma assumir sempre a mesma fatia e estourar
+o limite de verdade (foi exatamente isso que aconteceu com fatias fixas
+de 80+80+100=260s, sem sobrar margem real)."""
+
+TETO_BUSCA_SEGUNDOS = 60
+"""Teto por etapa de busca (e-mail, telefone) — enviar e-mail é a
+prioridade, então as buscas nunca usam mais que isso, mesmo que sobre bem
+mais tempo; o resto do orçamento vai todo pro envio."""
+
+
 def _executar_campanha_diaria() -> dict:
     """Corpo de verdade do envio diário da campanha — chamado tanto pelo
     cron (`/cron/campanhas/rodar`, autenticado por `CRON_SECRET`) quanto
@@ -400,13 +419,26 @@ def _executar_campanha_diaria() -> dict:
 
     base_url = os.environ.get("PUBLIC_BASE_URL") or request.host_url.rstrip("/")
 
+    inicio = monotonic()
     conn = _connect()
 
-    exa_api_key = os.environ.get("EXA_API_KEY")
-    busca_email = engine.buscar_emails_pendentes(conn, exa_api_key) if exa_api_key else None
-    busca_telefone = engine.buscar_telefones_pendentes(conn)
+    def tempo_restante() -> float:
+        return max(0.0, TEMPO_LIMITE_TOTAL_SEGUNDOS - (monotonic() - inicio))
 
-    resultado = engine.rodar_diario(conn, base_url, smtp_host, int(smtp_port), smtp_username, smtp_password, smtp_from=smtp_from)
+    exa_api_key = os.environ.get("EXA_API_KEY")
+    busca_email = (
+        engine.buscar_emails_pendentes(conn, exa_api_key, orcamento_segundos=min(TETO_BUSCA_SEGUNDOS, tempo_restante()))
+        if exa_api_key
+        else None
+    )
+    busca_telefone = engine.buscar_telefones_pendentes(
+        conn, orcamento_segundos=min(TETO_BUSCA_SEGUNDOS, tempo_restante())
+    )
+
+    resultado = engine.rodar_diario(
+        conn, base_url, smtp_host, int(smtp_port), smtp_username, smtp_password, smtp_from=smtp_from,
+        orcamento_segundos=tempo_restante(),
+    )
     leads_enviados_hoje = resultado.pop("leads_enviados")
     resultado["busca_email"] = busca_email
     resultado["busca_telefone"] = busca_telefone
