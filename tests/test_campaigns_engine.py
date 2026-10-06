@@ -311,6 +311,19 @@ def test_buscar_telefones_pendentes_stops_on_rate_limit_error():
     assert len(resultado["erros"]) == 1
 
 
+def test_buscar_telefones_pendentes_respects_limite_por_execucao():
+    conn = _conn()
+    for i in range(5):
+        storage.create_lead(conn, f"{i:02d}.222.333/0001-44", TESE, razao_social=f"Empresa {i}")
+
+    with patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value="1155554444") as mock_busca:
+        resultado = engine.buscar_telefones_pendentes(conn, limite=2)
+
+    assert mock_busca.call_count == 2
+    assert resultado["leads_verificados"] == 2
+    assert resultado["encontrados"] == 2
+
+
 def test_montar_link_whatsapp_normalizes_numero_and_includes_mensagem():
     lead = Lead(
         id=1, cnpj="11.222.333/0001-44", tese=TESE, razao_social="Empresa X", email=None, status="ativo",

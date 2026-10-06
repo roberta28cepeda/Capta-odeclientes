@@ -184,14 +184,23 @@ def rodar_diario(
     return {"leads_verificados": len(leads_e_tipos), "enviados": enviados, "erros": erros, "leads_enviados": leads_enviados}
 
 
-def buscar_telefones_pendentes(conn) -> dict:
+LIMITE_BUSCA_TELEFONE_POR_EXECUCAO = 50
+"""Mesmo problema e mesma solução do `LIMITE_BUSCA_EMAIL_POR_EXECUCAO`: sem
+teto, uma carteira grande de leads sem telefone faz essa função rodar uma
+chamada HTTP (até 10s cada) por lead, sequencialmente, estourando o tempo
+máximo da função serverless antes de chegar no envio de e-mail — o pedido
+fica "carregando" até a plataforma matar a execução. Processa em ordem de
+importação e avança um pouco a cada execução diária até zerar o backlog."""
+
+
+def buscar_telefones_pendentes(conn, limite: int = LIMITE_BUSCA_TELEFONE_POR_EXECUCAO) -> dict:
     """Busca o telefone de cada lead ativo (de qualquer tese) que ainda não
     tem um cadastrado, via ReceitaWS — pára assim que bate no limite de
     consultas por minuto da API gratuita, em vez de insistir; o resto fica
     pendente pro próximo cron (igual o enriquecimento por hora do Apps
     Script, só que aqui roda dentro do mesmo cron diário).
     """
-    leads = storage.leads_sem_telefone(conn)
+    leads = storage.leads_sem_telefone(conn)[:limite]
     verificados = 0
     encontrados = 0
     erros = []
