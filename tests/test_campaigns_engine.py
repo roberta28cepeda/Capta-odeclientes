@@ -167,6 +167,21 @@ def test_rodar_diario_sends_to_all_pending_leads_and_tracks_errors():
     assert len(resultado["erros"]) == 1
 
 
+def test_rodar_diario_stops_when_orcamento_de_tempo_estoura():
+    conn = _conn()
+    storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y", email="y@exemplo.com")
+
+    with patch("src.campaigns.engine.send_email_html") as mock_send, patch(
+        "src.campaigns.engine.monotonic", side_effect=[0.0, 0.0, 999.0]
+    ):
+        resultado = engine.rodar_diario(conn, "https://exemplo.com", "smtp.host", 587, "user", "pass", orcamento_segundos=10)
+
+    mock_send.assert_called_once()
+    assert resultado["enviados"] == 1
+    assert resultado["leads_verificados"] == 2  # tamanho total da fila, não quantos foram tentados
+
+
 def test_buscar_emails_pendentes_sets_email_for_leads_without_one():
     conn = _conn()
     lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
@@ -322,6 +337,37 @@ def test_buscar_telefones_pendentes_respects_limite_por_execucao():
     assert mock_busca.call_count == 2
     assert resultado["leads_verificados"] == 2
     assert resultado["encontrados"] == 2
+
+
+def test_buscar_telefones_pendentes_stops_when_orcamento_de_tempo_estoura():
+    conn = _conn()
+    for i in range(5):
+        storage.create_lead(conn, f"{i:02d}.222.333/0001-44", TESE, razao_social=f"Empresa {i}")
+
+    # monotonic() é chamado uma vez antes do loop (início) e uma vez por
+    # iteração — devolve um valor já além do orçamento na 2ª checagem, então
+    # só o primeiro lead é processado antes de parar.
+    with patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value="1155554444") as mock_busca, patch(
+        "src.campaigns.engine.monotonic", side_effect=[0.0, 0.0, 999.0]
+    ):
+        resultado = engine.buscar_telefones_pendentes(conn, orcamento_segundos=10)
+
+    assert mock_busca.call_count == 1
+    assert resultado["leads_verificados"] == 1
+
+
+def test_buscar_emails_pendentes_stops_when_orcamento_de_tempo_estoura():
+    conn = _conn()
+    for i in range(5):
+        storage.create_lead(conn, f"{i:02d}.222.333/0001-44", TESE, razao_social=f"Empresa {i}")
+
+    with patch(
+        "src.campaigns.engine.buscar_email_por_empresa", return_value="achado@empresa.com.br"
+    ) as mock_busca, patch("src.campaigns.engine.monotonic", side_effect=[0.0, 0.0, 999.0]):
+        resultado = engine.buscar_emails_pendentes(conn, "API_KEY", orcamento_segundos=10)
+
+    assert mock_busca.call_count == 1
+    assert resultado["leads_verificados"] == 1
 
 
 def test_montar_link_whatsapp_normalizes_numero_and_includes_mensagem():

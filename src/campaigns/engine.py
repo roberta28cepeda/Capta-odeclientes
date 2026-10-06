@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
+from time import monotonic
 from urllib.parse import quote
 
 from src.campaigns import html_shell, storage, tracking
@@ -157,13 +158,24 @@ def enviar_para_lead(
         )
 
 
+ORCAMENTO_ENVIO_SEGUNDOS = 100
+"""Tempo máximo que `rodar_diario` deixa passar mandando e-mail antes de
+parar e devolver o que já conseguiu — ver `ORCAMENTO_BUSCA_EMAIL_SEGUNDOS`
+pra explicação completa do porquê (resumo: a função serverless do Vercel
+mata a execução aos 300s, e cada etapa (busca de e-mail, busca de
+telefone, envio) precisa caber na fatia dela do orçamento total)."""
+
+
 def rodar_diario(
     conn, base_url: str, smtp_host: str, smtp_port: int, smtp_username: str, smtp_password: str,
     smtp_from: str | None = None,
+    orcamento_segundos: float = ORCAMENTO_ENVIO_SEGUNDOS,
 ) -> dict:
     """Roda o envio do dia pra todos os leads que precisam de contato,
     respeitando o limite diário por tese — erro num lead não trava os
-    demais, fica registrado no resultado.
+    demais, fica registrado no resultado. Pára de mandar mais e-mail (sem
+    erro, só interrompe) se passar do orçamento de tempo — o resto fica
+    pendente pra próxima execução.
 
     `leads_enviados` traz os objetos `Lead` de quem recebeu e-mail agora
     (usado só internamente, pra montar o resumo de WhatsApp da equipe — não
@@ -171,10 +183,13 @@ def rodar_diario(
     tirar essa chave do dicionário antes de devolver a resposta).
     """
     leads_e_tipos = leads_para_enviar_hoje(conn)
+    inicio = monotonic()
     enviados = 0
     erros = []
     leads_enviados: list[Lead] = []
     for lead, tipo in leads_e_tipos:
+        if monotonic() - inicio > orcamento_segundos:
+            break
         try:
             enviar_para_lead(conn, lead, tipo, base_url, smtp_host, smtp_port, smtp_username, smtp_password, smtp_from=smtp_from)
             enviados += 1
@@ -185,26 +200,41 @@ def rodar_diario(
 
 
 LIMITE_BUSCA_TELEFONE_POR_EXECUCAO = 50
-"""Mesmo problema e mesma solução do `LIMITE_BUSCA_EMAIL_POR_EXECUCAO`: sem
-teto, uma carteira grande de leads sem telefone faz essa função rodar uma
-chamada HTTP (até 10s cada) por lead, sequencialmente, estourando o tempo
-máximo da função serverless antes de chegar no envio de e-mail — o pedido
-fica "carregando" até a plataforma matar a execução. Processa em ordem de
-importação e avança um pouco a cada execução diária até zerar o backlog."""
+"""Teto superior de leads processados numa chamada — a defesa de verdade
+contra travar é o orçamento de tempo abaixo; isso aqui só evita processar
+uma lista gigante em memória sem necessidade."""
+
+ORCAMENTO_BUSCA_TELEFONE_SEGUNDOS = 80
+"""Essa função chama a ReceitaWS uma vez por lead, cada chamada com até
+10s de timeout — com dezenas de leads pendentes (comum em carteira grande
+importada da PGFN), um teto só por *quantidade* ainda podia estourar o
+tempo máximo da função serverless do Vercel (300s) se a API estivesse
+lenta, deixando o botão "Rodar agora" preso em "carregando" pra sempre.
+Por isso o corte agora é por *tempo decorrido*, verificado antes de cada
+chamada — pára e devolve o que já achou assim que bate o orçamento, sem
+erro, e o resto fica pendente pra próxima execução. Mesmo padrão em
+`buscar_emails_pendentes` e `rodar_diario`, cada um com sua fatia do
+orçamento total de 300s."""
 
 
-def buscar_telefones_pendentes(conn, limite: int = LIMITE_BUSCA_TELEFONE_POR_EXECUCAO) -> dict:
+def buscar_telefones_pendentes(
+    conn, limite: int = LIMITE_BUSCA_TELEFONE_POR_EXECUCAO, orcamento_segundos: float = ORCAMENTO_BUSCA_TELEFONE_SEGUNDOS
+) -> dict:
     """Busca o telefone de cada lead ativo (de qualquer tese) que ainda não
     tem um cadastrado, via ReceitaWS — pára assim que bate no limite de
-    consultas por minuto da API gratuita, em vez de insistir; o resto fica
-    pendente pro próximo cron (igual o enriquecimento por hora do Apps
-    Script, só que aqui roda dentro do mesmo cron diário).
+    consultas por minuto da API gratuita (ou no orçamento de tempo), em vez
+    de insistir; o resto fica pendente pro próximo cron (igual o
+    enriquecimento por hora do Apps Script, só que aqui roda dentro do
+    mesmo cron diário).
     """
     leads = storage.leads_sem_telefone(conn)[:limite]
+    inicio = monotonic()
     verificados = 0
     encontrados = 0
     erros = []
     for lead in leads:
+        if monotonic() - inicio > orcamento_segundos:
+            break
         try:
             telefone = buscar_telefone_por_cnpj(lead.cnpj)
         except PhoneFinderError as exc:
@@ -333,24 +363,44 @@ def enviar_resumo_whatsapp_equipe(
 
 
 LIMITE_BUSCA_EMAIL_POR_EXECUCAO = 50
-"""Teto de leads processados por chamada de `buscar_emails_pendentes` — sem
-isso, uma carteira grande (ex: dezenas de milhares de leads importados de
-uma planilha da PGFN) faria o cron estourar o tempo máximo da função
-serverless antes mesmo de chegar no envio de e-mail. Processa em ordem de
+"""Teto superior de leads processados por chamada — a defesa de verdade
+contra travar é o orçamento de tempo abaixo; isso aqui só evita processar
+uma lista gigante (ex: dezenas de milhares de leads importados de uma
+planilha da PGFN) em memória sem necessidade. Processa em ordem de
 importação (mais antigos primeiro) e vai avançando um pouco a cada
 execução diária até zerar o backlog."""
 
+ORCAMENTO_BUSCA_EMAIL_SEGUNDOS = 80
+"""Cada lead pode envolver duas chamadas HTTP com até 10s de timeout cada
+(busca + extração da página) — um teto só por *quantidade* ainda podia
+deixar essa etapa sozinha estourar o tempo máximo da função serverless do
+Vercel (300s) se a Exa ou os sites de origem estivessem lentos, e foi
+exatamente isso que aconteceu em produção (timeout de 300s confirmado nos
+logs). Por isso o corte agora é por *tempo decorrido*: pára e devolve o
+que já achou assim que bate o orçamento, sem contar como erro, e o resto
+fica pendente pra próxima execução — se autorregula sozinho conforme a
+API está mais rápida ou mais lenta no dia, sem precisar reajustar número
+na mão. Mesmo padrão em `buscar_telefones_pendentes` e `rodar_diario`,
+cada um com sua fatia do orçamento total de 300s."""
 
-def buscar_emails_pendentes(conn, api_key: str, limite: int = LIMITE_BUSCA_EMAIL_POR_EXECUCAO) -> dict:
+
+def buscar_emails_pendentes(
+    conn, api_key: str, limite: int = LIMITE_BUSCA_EMAIL_POR_EXECUCAO, orcamento_segundos: float = ORCAMENTO_BUSCA_EMAIL_SEGUNDOS
+) -> dict:
     """Busca o e-mail de cada lead ativo (de qualquer tese) que ainda não
     tem um cadastrado — roda automaticamente no cron diário, antes do
     envio, já que o usuário não opera por CLI em produção. Erro num lead
     (site fora do ar, cota esgotada etc.) não trava a busca dos demais.
     """
     leads = storage.leads_sem_email(conn)[:limite]
+    inicio = monotonic()
+    verificados = 0
     encontrados = 0
     erros = []
     for lead in leads:
+        if monotonic() - inicio > orcamento_segundos:
+            break
+        verificados += 1
         try:
             email = buscar_email_por_empresa(lead.razao_social or lead.cnpj, api_key)
         except EmailFinderError as exc:
@@ -359,7 +409,7 @@ def buscar_emails_pendentes(conn, api_key: str, limite: int = LIMITE_BUSCA_EMAIL
         if email:
             storage.set_lead_email(conn, lead.id, email)
             encontrados += 1
-    return {"leads_verificados": len(leads), "encontrados": encontrados, "erros": erros}
+    return {"leads_verificados": verificados, "encontrados": encontrados, "erros": erros}
 
 
 def gerar_relatorio_semanal(conn, desde: date, ate: date) -> str:
