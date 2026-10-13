@@ -510,6 +510,32 @@ def rodar_agora():
     return render_template_string(_RODAR_AGORA_TEMPLATE, resultado=resultado)
 
 
+@bp.get("/admin/campanhas/diagnostico/envios-hoje")
+def diagnostico_envios_hoje():
+    """Lista os envios registrados hoje, com CNPJ do lead e eventos de
+    rastreio (abertura/clique) associados — pra investigar antes de decidir
+    se um envio é "fantasma" (bug: marcado como enviado sem o SMTP
+    confirmar) ou se de fato saiu e foi aberto por alguém.
+    """
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+
+    conn = _connect()
+    desde_iso = datetime.combine(date.today(), time.min, tzinfo=timezone.utc).isoformat()
+    resultado = []
+    for envio in storage.envios_desde(conn, desde_iso):
+        lead = storage.get_lead(conn, envio.lead_id)
+        eventos = storage.eventos_do_envio(conn, envio.id)
+        resultado.append({
+            "envio_id": envio.id, "lead_id": envio.lead_id,
+            "cnpj": lead.cnpj if lead else None, "tese": lead.tese if lead else None,
+            "tipo": envio.tipo, "enviado_em": envio.enviado_em,
+            "eventos": [{"tipo": e.tipo, "ocorrido_em": e.ocorrido_em} for e in eventos],
+        })
+    return jsonify(resultado)
+
+
 @bp.post("/admin/campanhas/limpar-envios-fantasma-hoje")
 def limpar_envios_fantasma_hoje():
     """Ação administrativa única: apaga os envios registrados hoje — usada
