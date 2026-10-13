@@ -586,20 +586,23 @@ def test_proximo_dia_util_pula_fim_de_semana():
     assert engine.proximo_dia_util_texto(terca) == "quarta-feira, 14/10"
 
 
-def test_link_whatsapp_sai_sem_placeholders_e_com_horarios(monkeypatch):
+def _lead_tese(tese):
+    return Lead(id=1, cnpj="11.222.333/0001-44", tese=tese, razao_social="Empresa X", email=None,
+                status="ativo", criado_em="2026-10-01T00:00:00+00:00", telefone="21999998888")
+
+
+def test_link_whatsapp_sai_sem_placeholders_e_com_horarios_e_agenda_de_diagnostico(monkeypatch):
     from urllib.parse import unquote
-    monkeypatch.delenv("AGENDA_URL", raising=False)
-    lead = Lead(id=1, cnpj="11.222.333/0001-44", tese="simples_ibs_cbs", razao_social="Empresa X",
-                email=None, status="ativo", criado_em="2026-10-01T00:00:00+00:00", telefone="21999998888")
-    texto = unquote(engine.montar_link_whatsapp(lead))
+    monkeypatch.delenv("AGENDA_DIAGNOSTICO_URL", raising=False)
+    texto = unquote(engine.montar_link_whatsapp(_lead_tese("simples_ibs_cbs")))
     assert "[DIA]" not in texto and "[HORÁRIO" not in texto
     assert "10h" in texto and "15h" in texto
-    assert "agenda" not in texto
+    assert "https://calendar.app.google/Lr9ncHkwQ6DUK5nt6" in texto
 
 
-def test_link_whatsapp_inclui_link_da_agenda_quando_configurado(monkeypatch):
+def test_link_whatsapp_de_contadores_usa_agenda_geral(monkeypatch):
     from urllib.parse import unquote
-    monkeypatch.setenv("AGENDA_URL", "https://exemplo.com/agenda")
-    lead = Lead(id=1, cnpj="11.222.333/0001-44", tese="simples_ibs_cbs", razao_social="Empresa X",
-                email=None, status="ativo", criado_em="2026-10-01T00:00:00+00:00", telefone="21999998888")
-    assert "https://exemplo.com/agenda" in unquote(engine.montar_link_whatsapp(lead))
+    monkeypatch.delenv("AGENDA_GERAL_URL", raising=False)
+    texto = unquote(engine.montar_link_whatsapp(_lead_tese("contadores_certificado")))
+    assert "https://calendar.app.google/5DfZ6PfTF6eh3e4Z7" in texto
+    assert "[DIA]" not in texto and "[HORÁRIO" not in texto

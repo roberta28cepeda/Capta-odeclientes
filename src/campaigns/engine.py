@@ -377,16 +377,28 @@ def proximo_dia_util_texto(agora: datetime | None = None) -> str:
     return f"{_DIAS_SEMANA[dia.weekday()]}, {dia.strftime('%d/%m')}"
 
 
-def _preencher_horarios_whatsapp(mensagem: str, agora: datetime | None = None) -> str:
+AGENDA_DIAGNOSTICO_URL = "https://calendar.app.google/Lr9ncHkwQ6DUK5nt6"
+AGENDA_GERAL_URL = "https://calendar.app.google/5DfZ6PfTF6eh3e4Z7"
+
+
+def _agenda_da_tese(tese: str) -> str:
+    """Contadores (certificado/tese tributária) → agenda de atendimento geral; as demais
+    (Simples, indústria, PGFN, MEI) → agenda de diagnóstico tributário. Pode ser trocada
+    por variável de ambiente (AGENDA_GERAL_URL / AGENDA_DIAGNOSTICO_URL) sem mexer no código."""
+    if tese.startswith("contadores_"):
+        return (os.environ.get("AGENDA_GERAL_URL") or AGENDA_GERAL_URL).strip()
+    return (os.environ.get("AGENDA_DIAGNOSTICO_URL") or AGENDA_DIAGNOSTICO_URL).strip()
+
+
+def _preencher_horarios_whatsapp(mensagem: str, tese: str = "", agora: datetime | None = None) -> str:
     """Troca [DIA]/[HORÁRIO 1]/[HORÁRIO 2] pelos valores reais (antes iam literais pro
-    WhatsApp e a equipe tinha que editar na mão) e, se AGENDA_URL estiver configurada,
-    acrescenta o link da agenda no fim da mensagem."""
+    WhatsApp e a equipe tinha que editar na mão) e acrescenta o link da agenda no fim."""
     mensagem = (
         mensagem.replace("[DIA]", proximo_dia_util_texto(agora))
         .replace("[HORÁRIO 1]", HORARIO_1_WHATSAPP)
         .replace("[HORÁRIO 2]", HORARIO_2_WHATSAPP)
     )
-    agenda = (os.environ.get("AGENDA_URL") or "").strip()
+    agenda = _agenda_da_tese(tese)
     if agenda:
         mensagem += f"\n\n\U0001F517 Se preferir outro horário, escolha direto na nossa agenda: {agenda}"
     return mensagem
@@ -414,7 +426,7 @@ def montar_link_whatsapp(lead: Lead) -> str | None:
     nome = lead.razao_social or lead.cnpj
     template = _MENSAGENS_WHATSAPP_POR_TESE.get(lead.tese, _MENSAGEM_WHATSAPP_DIVIDA)
     mensagem = template.replace("{{EMPRESA}}", nome).replace("{{VALOR}}", _formatar_valor_brl(lead.valor_divida))
-    mensagem = _preencher_horarios_whatsapp(mensagem)
+    mensagem = _preencher_horarios_whatsapp(mensagem, lead.tese)
     return f"https://wa.me/{numero}?text={quote(mensagem, safe='')}"
 
 
