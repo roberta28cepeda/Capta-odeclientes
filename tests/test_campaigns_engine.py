@@ -1,6 +1,8 @@
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
+import pytest
+
 from src.campaigns import storage
 from src.campaigns import engine
 from src.campaigns.email_finder import EmailFinderError
@@ -188,6 +190,23 @@ def test_enviar_para_lead_uses_tese_specific_template():
     _, subject, _, html_body = mock_send.call_args[0][:4]
     assert "dinheiro na mesa" in html_body
     assert "certificado" in subject.lower()
+
+
+def test_enviar_para_lead_nao_registra_envio_quando_smtp_falha():
+    """Regressão: o envio era registrado no banco ANTES do SMTP confirmar o
+    envio, então uma falha de SMTP ainda marcava o lead como "contatado
+    hoje" e consumia a cota diária por tese sem nenhum e-mail sair de
+    verdade — exatamente o que aconteceu em produção (ja_enviados_hoje=10,
+    cota cheia, mas nenhum e-mail chegou de fato).
+    """
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+
+    with patch("src.campaigns.engine.send_email_html", side_effect=RuntimeError("smtp caiu")):
+        with pytest.raises(RuntimeError):
+            engine.enviar_para_lead(conn, lead, TIPO_INICIAL, "https://exemplo.com", "smtp.host", 587, "user", "pass")
+
+    assert storage.envios_do_lead(conn, lead.id) == []
 
 
 def test_rodar_diario_sends_to_all_pending_leads_and_tracks_errors():

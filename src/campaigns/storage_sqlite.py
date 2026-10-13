@@ -250,9 +250,9 @@ def _row_to_lead(row: sqlite3.Row) -> Lead:
     )
 
 
-def create_envio(conn: sqlite3.Connection, lead_id: int, tipo: str) -> Envio:
+def create_envio(conn: sqlite3.Connection, lead_id: int, tipo: str, tracking_token: str | None = None) -> Envio:
     enviado_em = datetime.now(timezone.utc).isoformat()
-    tracking_token = secrets.token_urlsafe(16)
+    tracking_token = tracking_token or secrets.token_urlsafe(16)
     cursor = conn.execute(
         "INSERT INTO campanha_envios (lead_id, tipo, enviado_em, tracking_token) VALUES (?, ?, ?, ?)",
         (lead_id, tipo, enviado_em, tracking_token),

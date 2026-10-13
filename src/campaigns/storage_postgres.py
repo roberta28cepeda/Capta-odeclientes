@@ -321,9 +321,9 @@ def _row_to_lead(row) -> Lead:
     )
 
 
-def create_envio(conn, lead_id: int, tipo: str) -> Envio:
+def create_envio(conn, lead_id: int, tipo: str, tracking_token: str | None = None) -> Envio:
     enviado_em = datetime.now(timezone.utc).isoformat()
-    tracking_token = secrets.token_urlsafe(16)
+    tracking_token = tracking_token or secrets.token_urlsafe(16)
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO campanha_envios (lead_id, tipo, enviado_em, tracking_token) "

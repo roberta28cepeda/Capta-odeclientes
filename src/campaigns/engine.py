@@ -7,6 +7,7 @@ relatório semanal de abertura/clique.
 from __future__ import annotations
 
 import re
+import secrets
 from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
@@ -129,12 +130,21 @@ def enviar_para_lead(
     """Manda o e-mail inicial (HTML com o design da marca) ou o follow-up
     (texto puro, de propósito, pra soar pessoal — mesmo padrão do Apps
     Script: nunca um follow-up com o mesmo visual do e-mail inicial).
+
+    O registro do envio (`storage.create_envio`) só acontece DEPOIS do SMTP
+    confirmar o envio — não antes. Gravar antes (como era até aqui) marcava
+    o lead como "já contatado hoje" mesmo quando o SMTP falhava na sequência,
+    silenciosamente consumindo a cota diária por tese sem nenhum e-mail
+    sair de verdade: confirmado em produção (log de
+    `leads_para_enviar_hoje`), onde as duas teses ativas mostravam
+    `ja_enviados_hoje=10` (cota cheia) mas a usuária confirmava que nenhum
+    e-mail tinha chegado.
     """
     template = storage.get_template(conn, lead.tese, tipo)
     if template is None:
         raise RuntimeError(f"Template '{tipo}' da tese '{lead.tese}' não encontrado.")
 
-    envio = storage.create_envio(conn, lead.id, tipo)
+    tracking_token = secrets.token_urlsafe(16)
 
     contexto = {
         "RAZAO_SOCIAL": lead.razao_social or lead.cnpj,
@@ -147,10 +157,10 @@ def enviar_para_lead(
     paragrafo2 = _substituir_placeholders(template.paragrafo2, contexto)
     italico = _substituir_placeholders(template.italico, contexto)
 
-    cta_url = tracking.click_url(base_url, envio.tracking_token, template.link_cta)
+    cta_url = tracking.click_url(base_url, tracking_token, template.link_cta)
 
     if tipo == TIPO_INICIAL:
-        pixel = tracking.pixel_img_tag(base_url, envio.tracking_token)
+        pixel = tracking.pixel_img_tag(base_url, tracking_token)
         corpo_html = html_shell.render_email_html(
             tag=template.tag, headline=headline, paragrafo1=paragrafo1, paragrafo2=paragrafo2,
             checklist=template.checklist, italico=italico, cta_texto=template.cta_texto, cta_url=cta_url,
@@ -174,6 +184,8 @@ def enviar_para_lead(
         send_email(
             lead.email, assunto, corpo_texto, smtp_host, smtp_port, smtp_username, smtp_password, smtp_from=smtp_from
         )
+
+    storage.create_envio(conn, lead.id, tipo, tracking_token=tracking_token)
 
 
 ORCAMENTO_ENVIO_SEGUNDOS = 100
