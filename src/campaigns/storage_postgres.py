@@ -70,6 +70,11 @@ _CONNECTION_ENV_VARS = ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_URL_NON_POOLIN
 
 # Mesmo cuidado do storage_postgres.py do fiscal_monitor: roda o DDL só uma
 # vez por processo "quente", não em todo connect() (ALTER/CREATE pede lock).
+_HEADLINES_ANTIGAS_INICIAL_PGFN = {
+    "transportadoras_pgfn": "Essa dívida ainda é pequena. Sua empresa pode manter assim, ou deixar crescer.",
+    "industria_tributaria_geral": "Essa dívida trava sua certidão negativa — mas também pode ter desconto pra ser quitada.",
+}
+
 _schema_ready = False
 
 
@@ -139,6 +144,23 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
                 "WHERE tese IN ('industria_tributaria_geral', 'contadores_certificado') "
                 "AND tipo <> 'inicial' AND headline LIKE '[AJUSTAR%'"
             )
+
+            # E-mail inicial das teses PGFN reescrito com os números do Edital 6/2026
+            # (prorrogado até 29/01/2027). O seed abaixo não sobrescreve linha existente,
+            # então atualiza aqui — mas só se ainda for o texto padrão antigo (headline
+            # idêntico), nunca uma edição feita depois em /admin/campanhas/templates.
+            for tese_pgfn, headline_antigo in _HEADLINES_ANTIGAS_INICIAL_PGFN.items():
+                novo = DEFAULT_TEMPLATES[tese_pgfn]["inicial"]
+                cur.execute(
+                    "UPDATE campanha_templates SET assunto = %s, headline = %s, paragrafo1 = %s, paragrafo2 = %s, "
+                    "checklist = %s, italico = %s, cta_texto = %s, rodape_nota = %s "
+                    "WHERE tese = %s AND tipo = 'inicial' AND headline = %s",
+                    (
+                        novo["assunto"], novo["headline"], novo["paragrafo1"], novo["paragrafo2"],
+                        _CHECKLIST_SEPARADOR.join(novo["checklist"]), novo["italico"], novo["cta_texto"],
+                        novo["rodape_nota"], tese_pgfn, headline_antigo,
+                    ),
+                )
 
             for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
                 for tipo, campos in templates_do_tese.items():

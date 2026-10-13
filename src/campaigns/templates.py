@@ -62,7 +62,8 @@ _FOLLOWUP_INDUSTRIA_TRIBUTARIA_GERAL = {
     "paragrafo2": (
         "Enquanto o débito segue em aberto, a empresa continua sem Certidão Negativa e o valor cresce com "
         "juros (SELIC). A transação tributária pode permitir desconto em juros e multa e parcelamento "
-        "estendido, mas depende do edital e do enquadramento da dívida. Por isso vale analisar antes."
+        "estendido (adesão até 29/01/2027), mas depende do edital e do enquadramento da dívida. Por isso "
+        "vale analisar antes."
     ),
     "checklist": [],
     "italico": "Uma conversa rápida já mostra se há margem de negociação no seu caso.",
@@ -95,18 +96,22 @@ _FOLLOWUP_CONTADORES_CERTIFICADO = {
 DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
     "transportadoras_pgfn": {
         TIPO_INICIAL: {
-            "assunto": "{{RAZAO_SOCIAL}} — dívida com a PGFN ainda é pequena",
+            "assunto": "{{RAZAO_SOCIAL}} — PGFN abriu desconto pra quitar sua dívida (até 29/01/2027)",
             "tag": "CONSULTA PÚBLICA, PGFN",
-            "headline": "Essa dívida ainda é pequena. Sua empresa pode manter assim, ou deixar crescer.",
+            "headline": "A PGFN abriu desconto pra dívida da sua empresa. A janela fecha em 29 de janeiro de 2027.",
             "paragrafo1": (
                 "A <strong>{{RAZAO_SOCIAL}}</strong> está na Lista de Devedores da União, com uma dívida de "
                 "Simples Nacional de <strong style=\"color:#0c4a4a;\">R$ {{VALOR_DIVIDA}}</strong>. "
-                "Dá pra resolver rápido, mas não pra sempre."
+                "Hoje a PGFN permite negociar esse tipo de dívida com desconto e parcelamento longo."
             ),
             "paragrafo2": (
-                "Esse débito cresce todo mês com juros e multa, e pode fazer a Receita excluir a "
-                "{{RAZAO_SOCIAL}} do Simples Nacional, trocando pra um regime bem mais caro justo na hora "
-                "que menos dá pra bancar."
+                "Pelo edital de transação em vigor, para ME e EPP o desconto pode chegar a "
+                "<strong style=\"color:#0c4a4a;\">70% do valor total</strong> da dívida (incidindo sobre juros, "
+                "multa e encargos), com saldo em até <strong style=\"color:#0c4a4a;\">133 parcelas</strong> "
+                "depois de uma entrada reduzida. A adesão é pelo Portal Regularize e vai até "
+                "<strong style=\"color:#0c4a4a;\">29/01/2027</strong>, mas o desconto depende do "
+                "enquadramento da dívida, por isso vale analisar antes de aderir. Sem acordo, o débito segue "
+                "crescendo e pode levar à exclusão da {{RAZAO_SOCIAL}} do Simples Nacional."
             ),
             "checklist": [
                 "Resposta rápida, sem enrolação",
@@ -114,7 +119,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "Você já sai sabendo qual é o caminho mais barato",
                 "Zero burocracia pra você, a gente cuida da parte chata",
             ],
-            "italico": "Cada mês parado é mais juro em cima do valor. Resolver agora é sempre mais barato que resolver depois.",
+            "italico": "Cada mês parado é mais juro em cima do valor, e a janela do edital fecha em 29/01/2027.",
             "cta_texto": "QUERO RESOLVER ISSO AGORA",
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": "dívida pequena resolvida cedo raramente vira problema grande depois.",
@@ -276,9 +281,9 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
     },
     "industria_tributaria_geral": {
         TIPO_INICIAL: {
-            "assunto": "{{RAZAO_SOCIAL}} — dívida com a União pode ter desconto e parcelamento",
+            "assunto": "{{RAZAO_SOCIAL}} — dívida com a União pode ter até 65% de desconto",
             "tag": "DÍVIDA ATIVA DA UNIÃO",
-            "headline": "Essa dívida trava sua certidão negativa — mas também pode ter desconto pra ser quitada.",
+            "headline": "Essa dívida trava sua certidão negativa — mas a PGFN abriu desconto pra quitar até 29/01/2027.",
             "paragrafo1": (
                 "A <strong>{{RAZAO_SOCIAL}}</strong> está na Lista de Devedores da União, com um débito "
                 "tributário federal de <strong style=\"color:#0c4a4a;\">R$ {{VALOR_DIVIDA}}</strong>. "
@@ -287,10 +292,13 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "clientes maiores."
             ),
             "paragrafo2": (
-                "A PGFN tem programas de <strong style=\"color:#0c4a4a;\">transação tributária</strong> que "
-                "permitem negociar desconto em juros e multa, além de parcelamento estendido — mas as "
-                "condições de cada edital mudam com o tempo, e o valor da dívida só cresce (SELIC) enquanto "
-                "isso."
+                "O edital de <strong style=\"color:#0c4a4a;\">transação tributária</strong> em vigor permite "
+                "desconto de até <strong style=\"color:#0c4a4a;\">65% do valor total</strong> da dívida "
+                "(incidindo sobre juros, multa e encargos), entrada de 6% (parcelável em até 6 vezes) e saldo "
+                "em até <strong style=\"color:#0c4a4a;\">114 parcelas</strong>. A adesão é pelo Portal "
+                "Regularize e vai até <strong style=\"color:#0c4a4a;\">29/01/2027</strong>, mas o desconto "
+                "depende da capacidade de pagamento da empresa e do enquadramento de cada inscrição. Por isso "
+                "vale analisar antes de aderir."
             ),
             "checklist": [
                 "Diagnóstico gratuito da dívida e das opções de negociação",
@@ -299,8 +307,8 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "Acompanhamento completo, sem você precisar entender de PGFN",
             ],
             "italico": (
-                "Cada mês parado é mais juro (SELIC) em cima do valor — e a condição de negociação "
-                "disponível hoje pode não estar disponível amanhã."
+                "Cada mês parado é mais juro (SELIC) em cima do valor — e a janela atual do edital fecha em "
+                "29/01/2027."
             ),
             "cta_texto": "QUERO NEGOCIAR ESSA DÍVIDA",
             "link_cta": _WHATSAPP_LINK,

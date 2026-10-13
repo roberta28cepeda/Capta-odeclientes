@@ -567,3 +567,12 @@ def test_enviar_resumo_whatsapp_equipe_sends_email():
 
     mock_send.assert_called_once()
     assert mock_send.call_args[0][0] == "equipe@exemplo.com"
+
+
+@pytest.mark.parametrize("tese", ["transportadoras_pgfn", "industria_tributaria_geral"])
+def test_iniciais_pgfn_citam_prazo_do_edital_vigente(tese):
+    conn = _conn()
+    template = storage.get_template(conn, tese, TIPO_INICIAL)
+    texto = " ".join([template.assunto, template.headline, template.paragrafo1, template.paragrafo2, template.italico])
+    assert "29/01/2027" in texto or "29 de janeiro de 2027" in texto
+    assert not engine.template_eh_rascunho(template)
