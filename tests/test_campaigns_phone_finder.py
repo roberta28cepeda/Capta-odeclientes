@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from src.campaigns.phone_finder import PhoneFinderError, buscar_telefone_por_cnpj
+from src.campaigns.phone_finder import PhoneFinderError, buscar_telefone_cnpja, buscar_telefone_por_cnpj
 
 
 def _mock_response(status_code=200, json_body=None):
@@ -62,3 +62,47 @@ def test_buscar_telefone_por_cnpj_raises_on_connection_error():
 
     with pytest.raises(PhoneFinderError, match="Falha de conexão"):
         buscar_telefone_por_cnpj("11.222.333/0001-44", session=session)
+
+
+def test_buscar_telefone_cnpja_returns_first_phone_with_area_code():
+    session = MagicMock()
+    session.get.return_value = _mock_response(
+        200, {"phones": [{"type": "MOBILE", "area": "11", "number": "955554444"}]}
+    )
+
+    telefone = buscar_telefone_cnpja("11.222.333/0001-44", "token-fake", session=session)
+
+    assert telefone == "(11) 955554444"
+    call_args, call_kwargs = session.get.call_args
+    assert call_args[0] == "https://api.cnpja.com/office/11222333000144"
+    assert call_kwargs["headers"]["Authorization"] == "token-fake"
+
+
+def test_buscar_telefone_cnpja_returns_none_when_no_phones():
+    session = MagicMock()
+    session.get.return_value = _mock_response(200, {"phones": []})
+
+    assert buscar_telefone_cnpja("11.222.333/0001-44", "token-fake", session=session) is None
+
+
+def test_buscar_telefone_cnpja_returns_none_when_not_found():
+    session = MagicMock()
+    session.get.return_value = _mock_response(404)
+
+    assert buscar_telefone_cnpja("11.222.333/0001-44", "token-fake", session=session) is None
+
+
+def test_buscar_telefone_cnpja_raises_on_error_status():
+    session = MagicMock()
+    session.get.return_value = _mock_response(401)
+
+    with pytest.raises(PhoneFinderError, match="HTTP 401"):
+        buscar_telefone_cnpja("11.222.333/0001-44", "token-invalido", session=session)
+
+
+def test_buscar_telefone_cnpja_raises_on_connection_error():
+    session = MagicMock()
+    session.get.side_effect = requests.exceptions.ConnectionError("sem rede")
+
+    with pytest.raises(PhoneFinderError, match="Falha de conexão"):
+        buscar_telefone_cnpja("11.222.333/0001-44", "token-fake", session=session)

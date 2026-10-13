@@ -403,11 +403,17 @@ execução — bem mais que os ~17 de antes — sem risco de estourar o
 orçamento total, já que o envio raramente precisa de muito tempo
 enquanto esse backlog não esvazia."""
 
-TETO_BUSCA_TELEFONE_SEGUNDOS = 30
-"""Telefone não precisa de orçamento grande — a ReceitaWS tem limite de
-poucas consultas por minuto e a busca já pára sozinha no primeiro erro de
-limite (ver `buscar_telefones_pendentes`), então gastar mais tempo aqui
-não acha mais nada, só atrasa o resto."""
+TETO_BUSCA_TELEFONE_SEGUNDOS_RECEITAWS = 30
+"""Sem CNPJA_API_TOKEN, cai na ReceitaWS — tem limite de poucas consultas
+por minuto e a busca já pára sozinha no primeiro erro de limite (ver
+`buscar_telefones_pendentes`), então gastar mais tempo aqui não acha mais
+nada, só atrasa o resto."""
+
+TETO_BUSCA_TELEFONE_SEGUNDOS_CNPJA = 100
+"""Com CNPJA_API_TOKEN configurado (fonte paga, sem o limite agressivo da
+ReceitaWS), telefone deixa de ser um gargalo artificial — mesmo raciocínio
+da busca de e-mail: vale gastar mais do orçamento aqui enquanto o backlog
+de leads sem telefone não esvazia."""
 
 
 def _executar_campanha_diaria() -> dict:
@@ -443,8 +449,10 @@ def _executar_campanha_diaria() -> dict:
         if exa_api_key
         else None
     )
+    cnpja_token = os.environ.get("CNPJA_API_TOKEN")
+    teto_busca_telefone = TETO_BUSCA_TELEFONE_SEGUNDOS_CNPJA if cnpja_token else TETO_BUSCA_TELEFONE_SEGUNDOS_RECEITAWS
     busca_telefone = engine.buscar_telefones_pendentes(
-        conn, orcamento_segundos=min(TETO_BUSCA_TELEFONE_SEGUNDOS, tempo_restante())
+        conn, orcamento_segundos=min(teto_busca_telefone, tempo_restante()), cnpja_token=cnpja_token
     )
 
     resultado = engine.rodar_diario(

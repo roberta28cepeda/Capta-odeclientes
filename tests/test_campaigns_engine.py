@@ -375,6 +375,21 @@ def test_buscar_telefones_pendentes_respects_limite_por_execucao():
     assert resultado["encontrados"] == 2
 
 
+def test_buscar_telefones_pendentes_usa_cnpja_quando_token_configurado():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+
+    with patch("src.campaigns.engine.buscar_telefone_cnpja", return_value="(11) 95555-4444") as mock_cnpja, patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj"
+    ) as mock_receitaws:
+        resultado = engine.buscar_telefones_pendentes(conn, cnpja_token="token-fake")
+
+    mock_cnpja.assert_called_once_with("11.222.333/0001-44", "token-fake")
+    mock_receitaws.assert_not_called()
+    assert resultado == {"leads_verificados": 1, "encontrados": 1, "erros": []}
+    assert storage.get_lead(conn, lead.id).telefone == "(11) 95555-4444"
+
+
 def test_buscar_telefones_pendentes_stops_when_orcamento_de_tempo_estoura():
     conn = _conn()
     for i in range(5):

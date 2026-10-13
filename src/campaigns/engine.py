@@ -23,7 +23,7 @@ from src.campaigns.models import (
     TIPO_INICIAL,
     TIPOS_ENVIO,
 )
-from src.campaigns.phone_finder import PhoneFinderError, buscar_telefone_por_cnpj
+from src.campaigns.phone_finder import PhoneFinderError, buscar_telefone_cnpja, buscar_telefone_por_cnpj
 from src.fiscal_monitor.email_client import send_email, send_email_html
 
 _TAG_HTML_RE = re.compile(r"<[^>]+>")
@@ -236,14 +236,16 @@ orçamento total de 300s."""
 
 
 def buscar_telefones_pendentes(
-    conn, limite: int = LIMITE_BUSCA_TELEFONE_POR_EXECUCAO, orcamento_segundos: float = ORCAMENTO_BUSCA_TELEFONE_SEGUNDOS
+    conn, limite: int = LIMITE_BUSCA_TELEFONE_POR_EXECUCAO, orcamento_segundos: float = ORCAMENTO_BUSCA_TELEFONE_SEGUNDOS,
+    cnpja_token: str | None = None,
 ) -> dict:
     """Busca o telefone de cada lead ativo (de qualquer tese) que ainda não
-    tem um cadastrado, via ReceitaWS — pára assim que bate no limite de
-    consultas por minuto da API gratuita (ou no orçamento de tempo), em vez
-    de insistir; o resto fica pendente pro próximo cron (igual o
-    enriquecimento por hora do Apps Script, só que aqui roda dentro do
-    mesmo cron diário).
+    tem um cadastrado — via CNPJá (fonte paga, sem o limite agressivo de
+    consultas por minuto) quando `cnpja_token` é passado, ou via ReceitaWS
+    (fonte pública gratuita) como fallback. Pára assim que bate num erro (na
+    ReceitaWS, provavelmente rate limit) ou no orçamento de tempo, em vez de
+    insistir; o resto fica pendente pro próximo cron (igual o enriquecimento
+    por hora do Apps Script, só que aqui roda dentro do mesmo cron diário).
     """
     leads = storage.leads_sem_telefone(conn)[:limite]
     inicio = monotonic()
@@ -254,10 +256,10 @@ def buscar_telefones_pendentes(
         if monotonic() - inicio > orcamento_segundos:
             break
         try:
-            telefone = buscar_telefone_por_cnpj(lead.cnpj)
+            telefone = buscar_telefone_cnpja(lead.cnpj, cnpja_token) if cnpja_token else buscar_telefone_por_cnpj(lead.cnpj)
         except PhoneFinderError as exc:
             erros.append({"lead_id": lead.id, "cnpj": lead.cnpj, "tese": lead.tese, "erro": str(exc)})
-            break  # provavelmente rate limit — não adianta insistir nos próximos
+            break  # provavelmente rate limit (ReceitaWS) ou token inválido (CNPJá) — não adianta insistir
         verificados += 1
         if telefone:
             storage.set_lead_telefone(conn, lead.id, telefone)
