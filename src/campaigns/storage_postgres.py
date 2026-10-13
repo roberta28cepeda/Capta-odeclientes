@@ -375,6 +375,19 @@ def envios_desde(conn, desde_iso: str) -> list[Envio]:
     return [_row_to_envio(row) for row in rows]
 
 
+def deletar_envios_desde(conn, desde_iso: str) -> int:
+    """Apaga todo envio registrado a partir de `desde_iso` — usado uma vez
+    pra limpar os registros "fantasma" de dias em que um bug fazia o
+    sistema marcar o lead como contatado mesmo quando o SMTP falhava (ver
+    `enviar_para_lead`), sem nenhum e-mail sair de verdade. Nunca usada no
+    fluxo normal; só via rota administrativa explícita."""
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM campanha_envios WHERE enviado_em >= %s", (desde_iso,))
+        total = cur.rowcount
+    conn.commit()
+    return total
+
+
 def envios_de_hoje_por_tese(conn, tese: str, desde_iso: str) -> int:
     with conn.cursor() as cur:
         cur.execute(

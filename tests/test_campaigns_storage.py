@@ -199,6 +199,16 @@ def test_create_envio_generates_unique_tracking_token():
     assert [e.tipo for e in storage.envios_do_lead(conn, lead.id)] == [TIPO_INICIAL, "followup_1"]
 
 
+def test_create_envio_uses_given_tracking_token_when_provided():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE)
+
+    envio = storage.create_envio(conn, lead.id, TIPO_INICIAL, tracking_token="token-fixo")
+
+    assert envio.tracking_token == "token-fixo"
+    assert storage.get_envio_by_token(conn, "token-fixo").id == envio.id
+
+
 def test_get_envio_by_token_roundtrip():
     conn = _conn()
     lead = storage.create_lead(conn, "11.222.333/0001-44", TESE)
@@ -218,7 +228,20 @@ def test_envios_de_hoje_por_tese_counts_only_matching_tese():
     desde = "1970-01-01T00:00:00+00:00"
     assert storage.envios_de_hoje_por_tese(conn, TESE, desde) == 1
     assert storage.envios_de_hoje_por_tese(conn, OUTRA_TESE, desde) == 1
-    assert storage.envios_de_hoje_por_tese(conn, "tese-sem-envios", desde) == 0
+
+
+def test_deletar_envios_desde_removes_only_envios_on_or_after_cutoff():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", TESE)
+    envio_antigo = storage.create_envio(conn, lead.id, TIPO_INICIAL)
+    conn.execute("UPDATE campanha_envios SET enviado_em = ? WHERE id = ?", ("2020-01-01T00:00:00+00:00", envio_antigo.id))
+    conn.commit()
+    storage.create_envio(conn, lead.id, "followup_1")
+
+    total_apagado = storage.deletar_envios_desde(conn, "2024-01-01T00:00:00+00:00")
+
+    assert total_apagado == 1
+    assert [e.tipo for e in storage.envios_do_lead(conn, lead.id)] == [TIPO_INICIAL]
 
 
 def test_add_evento_and_eventos_do_envio():

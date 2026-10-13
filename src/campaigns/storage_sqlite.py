@@ -298,6 +298,17 @@ def envios_desde(conn: sqlite3.Connection, desde_iso: str) -> list[Envio]:
     return [_row_to_envio(row) for row in rows]
 
 
+def deletar_envios_desde(conn: sqlite3.Connection, desde_iso: str) -> int:
+    """Apaga todo envio registrado a partir de `desde_iso` — usado uma vez
+    pra limpar os registros "fantasma" de dias em que um bug fazia o
+    sistema marcar o lead como contatado mesmo quando o SMTP falhava (ver
+    `enviar_para_lead`), sem nenhum e-mail sair de verdade. Nunca usada no
+    fluxo normal; só via rota administrativa explícita."""
+    cursor = conn.execute("DELETE FROM campanha_envios WHERE enviado_em >= ?", (desde_iso,))
+    conn.commit()
+    return cursor.rowcount
+
+
 def envios_de_hoje_por_tese(conn: sqlite3.Connection, tese: str, desde_iso: str) -> int:
     """Quantos envios (inicial + follow-up somados) já saíram hoje pra essa
     tese — usado pra aplicar o limite diário por tese.

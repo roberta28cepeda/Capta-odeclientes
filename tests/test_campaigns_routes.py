@@ -419,6 +419,30 @@ def test_rodar_agora_post_runs_and_sends_pending_leads(app, monkeypatch, campaig
     assert "E-mails enviados".encode() in response.data
 
 
+def test_limpar_envios_fantasma_hoje_requires_admin(app):
+    response = app.test_client().post("/admin/campanhas/limpar-envios-fantasma-hoje")
+    assert response.status_code == 401
+
+
+def test_limpar_envios_fantasma_hoje_deletes_only_todays_envios(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    envio_antigo = campaigns_storage.create_envio(conn, lead.id, "inicial")
+    conn.execute("UPDATE campanha_envios SET enviado_em = ? WHERE id = ?", ("2020-01-01T00:00:00+00:00", envio_antigo.id))
+    conn.commit()
+    campaigns_storage.create_envio(conn, lead.id, "followup_1")
+
+    response = app.test_client().post(
+        "/admin/campanhas/limpar-envios-fantasma-hoje", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["envios_apagados"] == 1
+    assert [e.tipo for e in campaigns_storage.envios_do_lead(conn, lead.id)] == ["inicial"]
+
+
 def test_cartao_whatsapp_requires_admin(app):
     response = app.test_client().get("/admin/campanhas/whatsapp")
     assert response.status_code == 401

@@ -13,7 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import os
-from datetime import date
+from datetime import date, datetime, time, timezone
 from time import monotonic
 
 from flask import Blueprint, Response, current_app, jsonify, redirect, render_template_string, request
@@ -508,3 +508,22 @@ def rodar_agora():
 
     resultado = _executar_campanha_diaria()
     return render_template_string(_RODAR_AGORA_TEMPLATE, resultado=resultado)
+
+
+@bp.post("/admin/campanhas/limpar-envios-fantasma-hoje")
+def limpar_envios_fantasma_hoje():
+    """Ação administrativa única: apaga os envios registrados hoje — usada
+    pra limpar a cota diária por tese inflada por um bug já corrigido (ver
+    `enviar_para_lead`), em que o lead era marcado como contatado mesmo
+    quando o SMTP falhava, sem nenhum e-mail sair. Não faz parte do fluxo
+    normal; só existe pra destravar a cota do dia em que o bug foi achado,
+    sem precisar esperar a virada natural à meia-noite.
+    """
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+
+    conn = _connect()
+    desde_iso = datetime.combine(date.today(), time.min, tzinfo=timezone.utc).isoformat()
+    total_apagado = storage.deletar_envios_desde(conn, desde_iso)
+    return jsonify({"envios_apagados": total_apagado, "desde": desde_iso})
