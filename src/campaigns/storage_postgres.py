@@ -132,6 +132,14 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
                 "WHERE tese = 'mei_regularizacao' AND tipo = 'inicial' AND headline LIKE '[AJUSTAR%'"
             )
 
+            # Follow-up real (substitui o rascunho) das teses ativas — mesma regra:
+            # só apaga se ainda for rascunho, nunca uma edição feita depois.
+            cur.execute(
+                "DELETE FROM campanha_templates "
+                "WHERE tese IN ('industria_tributaria_geral', 'contadores_certificado') "
+                "AND tipo <> 'inicial' AND headline LIKE '[AJUSTAR%'"
+            )
+
             for tese, templates_do_tese in DEFAULT_TEMPLATES.items():
                 for tipo, campos in templates_do_tese.items():
                     cur.execute(
