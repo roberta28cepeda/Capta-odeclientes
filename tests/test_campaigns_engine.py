@@ -322,9 +322,30 @@ def test_enviar_relatorio_semanal_sends_email_with_report_body():
     assert mock_send.call_args[0][0] == "admin@exemplo.com"
 
 
-def test_enviar_para_lead_followup_uses_plain_text_not_html():
+def test_enviar_para_lead_followup_rascunho_nao_envia_nem_registra_envio():
+    """Regressão: follow-up com [AJUSTAR]/[RASCUNHO] chegou em lead real."""
     conn = _conn()
     lead = storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    storage.create_envio(conn, lead.id, TIPO_INICIAL)
+
+    with patch("src.campaigns.engine.send_email") as mock_send:
+        with pytest.raises(engine.TemplateRascunhoError):
+            engine.enviar_para_lead(conn, lead, "followup_1", "https://exemplo.com", "smtp.host", 587, "user", "pass")
+
+    mock_send.assert_not_called()
+    assert [e.tipo for e in storage.envios_do_lead(conn, lead.id)] == [TIPO_INICIAL]
+
+
+@pytest.mark.parametrize("tese", ["industria_tributaria_geral", "contadores_certificado"])
+def test_followups_das_teses_ativas_nao_sao_rascunho(tese):
+    conn = _conn()
+    template = storage.get_template(conn, tese, "followup_1")
+    assert not engine.template_eh_rascunho(template)
+
+
+def test_enviar_para_lead_followup_uses_plain_text_not_html():
+    conn = _conn()
+    lead = storage.create_lead(conn, "11.222.333/0001-44", OUTRA_TESE, razao_social="Empresa X", email="x@exemplo.com")
     storage.create_envio(conn, lead.id, TIPO_INICIAL)
 
     with patch("src.campaigns.engine.send_email") as mock_send, patch(
@@ -336,7 +357,7 @@ def test_enviar_para_lead_followup_uses_plain_text_not_html():
     mock_send_html.assert_not_called()
     to, subject, corpo = mock_send.call_args[0][:3]
     assert to == "x@exemplo.com"
-    assert "Empresa X" in subject
+    assert "[AJUSTAR" not in subject + corpo and "[RASCUNHO" not in subject + corpo
     assert "<" not in corpo  # texto puro, sem tag HTML nenhuma
 
 

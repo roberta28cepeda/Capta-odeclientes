@@ -29,6 +29,18 @@ from src.fiscal_monitor.email_client import send_email, send_email_html
 
 _TAG_HTML_RE = re.compile(r"<[^>]+>")
 
+MARCADORES_RASCUNHO = ("[AJUSTAR", "[RASCUNHO")
+
+
+class TemplateRascunhoError(RuntimeError):
+    """Template ainda tem texto de rascunho ([AJUSTAR]/[RASCUNHO]) — não pode ser enviado."""
+
+
+def template_eh_rascunho(template) -> bool:
+    campos = [template.assunto, template.tag, template.headline, template.paragrafo1, template.paragrafo2,
+              template.italico, template.cta_texto, template.rodape_nota, *template.checklist]
+    return any(marcador in (campo or "") for campo in campos for marcador in MARCADORES_RASCUNHO)
+
 
 def _proximo_tipo_envio(envios: list[Envio]) -> str | None:
     """Dado o histórico de envios de um lead, retorna o próximo tipo a
@@ -143,6 +155,11 @@ def enviar_para_lead(
     template = storage.get_template(conn, lead.tese, tipo)
     if template is None:
         raise RuntimeError(f"Template '{tipo}' da tese '{lead.tese}' não encontrado.")
+    if template_eh_rascunho(template):
+        raise TemplateRascunhoError(
+            f"Template '{tipo}' da tese '{lead.tese}' ainda é rascunho ([AJUSTAR]/[RASCUNHO]) — "
+            "escreva o texto real em /admin/campanhas/templates antes de enviar."
+        )
 
     tracking_token = secrets.token_urlsafe(16)
 

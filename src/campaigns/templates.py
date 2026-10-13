@@ -51,6 +51,46 @@ def _followup_rascunho(tag: str) -> dict:
     }
 
 
+_FOLLOWUP_INDUSTRIA_TRIBUTARIA_GERAL = {
+    "assunto": "Re: {{RAZAO_SOCIAL}} — dívida com a União",
+    "tag": "DÍVIDA ATIVA DA UNIÃO",
+    "headline": "Passando pra lembrar da dívida da {{RAZAO_SOCIAL}} com a União",
+    "paragrafo1": (
+        "Há alguns dias escrevi sobre o débito tributário federal de R$ {{VALOR_DIVIDA}} em nome da "
+        "{{RAZAO_SOCIAL}}. Não sei se a mensagem chegou na pessoa certa, então volto de forma direta."
+    ),
+    "paragrafo2": (
+        "Enquanto o débito segue em aberto, a empresa continua sem Certidão Negativa e o valor cresce com "
+        "juros (SELIC). A transação tributária pode permitir desconto em juros e multa e parcelamento "
+        "estendido, mas depende do edital e do enquadramento da dívida. Por isso vale analisar antes."
+    ),
+    "checklist": [],
+    "italico": "Uma conversa rápida já mostra se há margem de negociação no seu caso.",
+    "cta_texto": "QUERO ANALISAR ESSA DÍVIDA",
+    "link_cta": _WHATSAPP_LINK,
+    "rodape_nota": "",
+}
+
+_FOLLOWUP_CONTADORES_CERTIFICADO = {
+    "assunto": "Re: certificado digital — parceria Leactis",
+    "tag": "EXCLUSIVO PARA ESCRITÓRIOS CONTÁBEIS",
+    "headline": "Ainda sobre os certificados digitais dos seus clientes",
+    "paragrafo1": (
+        "Escrevi há alguns dias sobre a parceria da Leactis com escritórios contábeis. Volto rapidinho "
+        "caso o e-mail tenha passado batido."
+    ),
+    "paragrafo2": (
+        "Resumindo: você indica, a Leactis cuida da emissão e do suporte, você define o preço ao cliente "
+        "e paga R$ 120 por certificado emitido, ficando com a diferença. Sem estrutura nova no escritório."
+    ),
+    "checklist": [],
+    "italico": "Trabalhamos com poucos parceiros por região, então vale conversar antes de a vaga da sua área fechar.",
+    "cta_texto": "QUERO CONHECER A PARCERIA",
+    "link_cta": _WHATSAPP_LINK,
+    "rodape_nota": "",
+}
+
+
 # {tese_slug: {tipo: {campos...}}}
 DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
     "transportadoras_pgfn": {
@@ -92,16 +132,17 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "obra, financiamento e licitação) e corre risco real de sair do regime."
             ),
             "paragrafo2": (
-                "E o prazo está correndo: até 30 de setembro, toda empresa do Simples decide o futuro "
-                "tributário dela pra 2027. Com pendência aberta, sua empresa pode nem chegar nessa escolha."
+                "E o prazo está correndo: até 30 de outubro, toda empresa do Simples escolhe como vai pagar IBS e CBS "
+                "em 2027, e é nessa mesma data que as pendências precisam estar regularizadas. Com pendência "
+                "aberta, sua empresa corre risco de ficar de fora do Simples."
             ),
             "checklist": [
                 "Diagnóstico da pendência em até 48h",
                 "Plano pra recuperar sua CND",
                 "Simulação do melhor regime pra 2027",
-                "Acompanhamento até o fim do prazo (30/09)",
+                "Acompanhamento até o fim do prazo (30/10)",
             ],
-            "italico": "Cada dia sem resolver é um dia sem CND, e um dia mais perto de setembro fechar sem sua empresa ter decidido nada.",
+            "italico": "Cada dia sem resolver é um dia sem CND, e um dia mais perto de outubro fechar sem sua empresa ter decidido nada.",
             "cta_texto": "QUERO RESOLVER ISSO E ENTENDER O MELHOR REGIME",
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": (
@@ -123,7 +164,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "corre risco real de sair do regime."
             ),
             "paragrafo2": (
-                "E até 30 de setembro fica pior: sua indústria decide como vai gerar crédito pros clientes a "
+                "E até 30 de outubro fica pior: sua indústria decide como vai gerar crédito pros clientes a "
                 "partir de 2027. Decidir errado, ou nem chegar a decidir por causa da pendência, pode custar "
                 "contrato pra concorrente que oferece mais crédito."
             ),
@@ -131,9 +172,9 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "Diagnóstico da pendência em até 48h",
                 "Plano pra recuperar sua CND",
                 "Simulação de crédito pros seus clientes B2B",
-                "Acompanhamento até o fim do prazo (30/09)",
+                "Acompanhamento até o fim do prazo (30/10)",
             ],
-            "italico": "Cada dia sem resolver é um dia mais perto de perder contrato pra concorrente, e um dia mais perto de setembro fechar sem sua indústria ter decidido nada.",
+            "italico": "Cada dia sem resolver é um dia mais perto de perder contrato pra concorrente, e um dia mais perto de outubro fechar sem sua indústria ter decidido nada.",
             "cta_texto": "QUERO RESOLVER ISSO E GANHAR COMPETITIVIDADE",
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": (
@@ -167,12 +208,12 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "Emissão e suporte inteiramente pela Leactis",
                 "Sem estrutura técnica nem equipe nova",
             ],
-            "italico": "Para manter o suporte próximo, aceitamos poucos parceiros por região: garanta a sua vaga antes que o cupo da sua área feche.",
+            "italico": "Para manter o suporte próximo, aceitamos poucos parceiros por região: garanta a sua vaga antes que as vagas da sua área acabem.",
             "cta_texto": "QUERO COMEÇAR A GANHAR COM MINHAS INDICAÇÕES",
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": _NOTAS_RODAPE_PADRAO,
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho("EXCLUSIVO PARA ESCRITÓRIOS CONTÁBEIS"),
+        TIPOS_FOLLOWUP[0]: _FOLLOWUP_CONTADORES_CERTIFICADO,
     },
     "contadores_tributaria": {
         TIPO_INICIAL: {
@@ -197,7 +238,7 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
                 "Análise inicial sem custo pro seu escritório",
                 "Sem exclusividade, sem burocracia pra começar",
             ],
-            "italico": "Para manter o suporte próximo, aceitamos poucos parceiros por região: garanta a sua vaga antes que o cupo da sua área feche.",
+            "italico": "Para manter o suporte próximo, aceitamos poucos parceiros por região: garanta a sua vaga antes que as vagas da sua área acabem.",
             "cta_texto": "QUERO SER PARCEIRO LEACTIS",
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": _NOTAS_RODAPE_PADRAO,
@@ -265,6 +306,6 @@ DEFAULT_TEMPLATES: dict[str, dict[str, dict]] = {
             "link_cta": _WHATSAPP_LINK,
             "rodape_nota": "quanto mais cedo resolvida, menor o custo final em juros e multa.",
         },
-        TIPOS_FOLLOWUP[0]: _followup_rascunho("DÍVIDA ATIVA DA UNIÃO"),
+        TIPOS_FOLLOWUP[0]: _FOLLOWUP_INDUSTRIA_TRIBUTARIA_GERAL,
     },
 }
