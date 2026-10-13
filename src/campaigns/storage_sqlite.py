@@ -268,6 +268,24 @@ def envios_do_lead(conn: sqlite3.Connection, lead_id: int) -> list[Envio]:
     return [_row_to_envio(row) for row in rows]
 
 
+def envios_por_lead_ids(conn: sqlite3.Connection, lead_ids: list[int]) -> dict[int, list[Envio]]:
+    """Mesmo resultado que chamar `envios_do_lead` pra cada id, mas numa
+    única consulta — evita N+1 query quando se precisa do histórico de
+    envio de muitos leads de uma vez (ex: decidir quem está pendente hoje).
+    """
+    resultado: dict[int, list[Envio]] = {}
+    if not lead_ids:
+        return resultado
+    placeholders = ",".join("?" * len(lead_ids))
+    rows = conn.execute(
+        f"SELECT * FROM campanha_envios WHERE lead_id IN ({placeholders}) ORDER BY lead_id, id", lead_ids
+    ).fetchall()
+    for row in rows:
+        envio = _row_to_envio(row)
+        resultado.setdefault(envio.lead_id, []).append(envio)
+    return resultado
+
+
 def get_envio_by_token(conn: sqlite3.Connection, tracking_token: str) -> Envio | None:
     row = conn.execute("SELECT * FROM campanha_envios WHERE tracking_token = ?", (tracking_token,)).fetchone()
     return _row_to_envio(row) if row else None

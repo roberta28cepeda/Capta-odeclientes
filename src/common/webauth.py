@@ -27,8 +27,8 @@ def admin_authenticated() -> bool:
     admin_password = os.environ.get("ADMIN_PASSWORD")
     if (
         admin_password
-        and secrets.compare_digest(auth.username or "", admin_username)
-        and secrets.compare_digest(auth.password or "", admin_password)
+        and secrets.compare_digest((auth.username or "").encode("utf-8"), admin_username.encode("utf-8"))
+        and secrets.compare_digest((auth.password or "").encode("utf-8"), admin_password.encode("utf-8"))
     ):
         return True
 

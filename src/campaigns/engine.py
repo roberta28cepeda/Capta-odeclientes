@@ -56,23 +56,27 @@ def _inicio_do_dia_utc(hoje: date | None = None) -> str:
 def leads_pendentes_por_tese(conn) -> dict[str, list[tuple[Lead, str]]]:
     """Agrupa por tese os leads ativos com e-mail que precisam de algum
     contato hoje (inicial ou próximo follow-up), sem aplicar limite ainda.
+
+    Busca o histórico de envios de todos os leads ativos numa única consulta
+    (`envios_por_lead_ids`) em vez de uma consulta por lead — com a carteira
+    na casa dos milhares, uma consulta por lead (N+1) era rápido o bastante
+    em testes pequenos mas periodicamente estourava os 300s do Vercel em
+    produção (confirmado por "Task timed out after 300 seconds" repetido ao
+    longo de uma semana, sem relação com o teto de tempo das etapas de busca
+    de e-mail/telefone, que já tinham seu próprio orçamento).
     """
+    leads_ativos = [lead for lead in storage.list_leads(conn) if lead.status == STATUS_ATIVO and lead.email]
+    envios_por_lead = storage.envios_por_lead_ids(conn, [lead.id for lead in leads_ativos])
     resultado: dict[str, list[tuple[Lead, str]]] = {}
-    total = 0
-    ativos_com_email = 0
     sem_tipo_pendente = 0
-    for lead in storage.list_leads(conn):
-        total += 1
-        if lead.status != STATUS_ATIVO or not lead.email:
-            continue
-        ativos_com_email += 1
-        tipo = _proximo_tipo_envio(storage.envios_do_lead(conn, lead.id))
+    for lead in leads_ativos:
+        tipo = _proximo_tipo_envio(envios_por_lead.get(lead.id, []))
         if tipo:
             resultado.setdefault(lead.tese, []).append((lead, tipo))
         else:
             sem_tipo_pendente += 1
     print(
-        f"[leads_pendentes_por_tese] total_leads={total} ativos_com_email={ativos_com_email} "
+        f"[leads_pendentes_por_tese] ativos_com_email={len(leads_ativos)} "
         f"sem_tipo_pendente={sem_tipo_pendente} teses_com_pendente={list(resultado.keys())}"
     )
     return resultado

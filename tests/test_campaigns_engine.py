@@ -31,6 +31,42 @@ def test_leads_para_enviar_hoje_includes_new_lead_with_email():
     assert resultado[0][1] == TIPO_INICIAL
 
 
+def test_leads_pendentes_por_tese_nao_faz_uma_consulta_por_lead():
+    """Regressão: antes, leads_pendentes_por_tese chamava envios_do_lead
+    (uma consulta ao banco) pra cada lead ativo, sem nenhum limite de
+    tempo — com a carteira na casa dos milhares isso periodicamente
+    estourava o timeout de 300s do Vercel em produção. A versão corrigida
+    busca o histórico de todos os leads numa única chamada
+    (envios_por_lead_ids).
+    """
+    conn = _conn()
+    for i in range(5):
+        storage.create_lead(conn, f"11.222.333/000{i}-44", TESE, razao_social=f"Empresa {i}", email=f"x{i}@exemplo.com")
+
+    with patch("src.campaigns.storage.envios_do_lead") as mock_envios_do_lead:
+        resultado = engine.leads_pendentes_por_tese(conn)
+
+    mock_envios_do_lead.assert_not_called()
+    assert len(resultado[TESE]) == 5
+
+
+def test_leads_pendentes_por_tese_respeita_followup_pendente_de_cada_lead():
+    conn = _conn()
+    lead_novo = storage.create_lead(conn, "11.111.111/0001-11", TESE, razao_social="Novo", email="novo@exemplo.com")
+    lead_recente = storage.create_lead(conn, "22.222.222/0001-22", TESE, razao_social="Recente", email="recente@exemplo.com")
+    storage.create_envio(conn, lead_recente.id, TIPO_INICIAL)  # enviado agora — não é due pra followup ainda
+    lead_due = storage.create_lead(conn, "33.333.333/0001-33", TESE, razao_social="Due", email="due@exemplo.com")
+    envio_antigo = storage.create_envio(conn, lead_due.id, TIPO_INICIAL)
+    _envelhecer_envio(conn, envio_antigo, dias=10)
+
+    resultado = engine.leads_pendentes_por_tese(conn)
+
+    pendentes_por_id = {lead.id: tipo for lead, tipo in resultado[TESE]}
+    assert pendentes_por_id[lead_novo.id] == TIPO_INICIAL
+    assert lead_recente.id not in pendentes_por_id
+    assert lead_due.id in pendentes_por_id
+
+
 def test_leads_para_enviar_hoje_excludes_lead_without_email():
     conn = _conn()
     storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
