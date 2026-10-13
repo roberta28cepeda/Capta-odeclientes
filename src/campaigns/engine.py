@@ -6,12 +6,14 @@ relatório semanal de abertura/clique.
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from src.campaigns import html_shell, storage, tracking
 from src.campaigns.email_finder import EmailFinderError, buscar_email_por_empresa
@@ -360,6 +362,36 @@ _MENSAGENS_WHATSAPP_POR_TESE: dict[str, str] = {
 }
 
 
+HORARIO_1_WHATSAPP = "10h"
+HORARIO_2_WHATSAPP = "15h"
+_DIAS_SEMANA = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"]
+
+
+def proximo_dia_util_texto(agora: datetime | None = None) -> str:
+    """Próximo dia útil (seg a sex) depois de hoje, no fuso de Brasília — ex.: "quinta-feira, 15/10".
+    A reunião é sempre marcada pro dia seguinte ao contato (regra da operação)."""
+    agora = agora or datetime.now(ZoneInfo("America/Sao_Paulo"))
+    dia = agora.date() + timedelta(days=1)
+    while dia.weekday() >= 5:
+        dia += timedelta(days=1)
+    return f"{_DIAS_SEMANA[dia.weekday()]}, {dia.strftime('%d/%m')}"
+
+
+def _preencher_horarios_whatsapp(mensagem: str, agora: datetime | None = None) -> str:
+    """Troca [DIA]/[HORÁRIO 1]/[HORÁRIO 2] pelos valores reais (antes iam literais pro
+    WhatsApp e a equipe tinha que editar na mão) e, se AGENDA_URL estiver configurada,
+    acrescenta o link da agenda no fim da mensagem."""
+    mensagem = (
+        mensagem.replace("[DIA]", proximo_dia_util_texto(agora))
+        .replace("[HORÁRIO 1]", HORARIO_1_WHATSAPP)
+        .replace("[HORÁRIO 2]", HORARIO_2_WHATSAPP)
+    )
+    agenda = (os.environ.get("AGENDA_URL") or "").strip()
+    if agenda:
+        mensagem += f"\n\n\U0001F517 Se preferir outro horário, escolha direto na nossa agenda: {agenda}"
+    return mensagem
+
+
 def tem_mensagem_whatsapp_dedicada(tese: str) -> bool:
     """Usado só pra diagnóstico (`/admin/status`) — indica se a tese tem
     mensagem de WhatsApp própria ou cai na genérica de dívida."""
@@ -382,7 +414,8 @@ def montar_link_whatsapp(lead: Lead) -> str | None:
     nome = lead.razao_social or lead.cnpj
     template = _MENSAGENS_WHATSAPP_POR_TESE.get(lead.tese, _MENSAGEM_WHATSAPP_DIVIDA)
     mensagem = template.replace("{{EMPRESA}}", nome).replace("{{VALOR}}", _formatar_valor_brl(lead.valor_divida))
-    return f"https://wa.me/{numero}?text={quote(mensagem)}"
+    mensagem = _preencher_horarios_whatsapp(mensagem)
+    return f"https://wa.me/{numero}?text={quote(mensagem, safe='')}"
 
 
 def montar_resumo_whatsapp(leads: list[Lead], base_url: str) -> str:

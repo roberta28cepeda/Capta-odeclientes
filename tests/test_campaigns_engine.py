@@ -576,3 +576,30 @@ def test_iniciais_pgfn_citam_prazo_do_edital_vigente(tese):
     texto = " ".join([template.assunto, template.headline, template.paragrafo1, template.paragrafo2, template.italico])
     assert "29/01/2027" in texto or "29 de janeiro de 2027" in texto
     assert not engine.template_eh_rascunho(template)
+
+
+def test_proximo_dia_util_pula_fim_de_semana():
+    from zoneinfo import ZoneInfo
+    sexta = datetime(2026, 10, 16, 10, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    assert engine.proximo_dia_util_texto(sexta) == "segunda-feira, 19/10"
+    terca = datetime(2026, 10, 13, 19, 0, tzinfo=ZoneInfo("America/Sao_Paulo"))
+    assert engine.proximo_dia_util_texto(terca) == "quarta-feira, 14/10"
+
+
+def test_link_whatsapp_sai_sem_placeholders_e_com_horarios(monkeypatch):
+    from urllib.parse import unquote
+    monkeypatch.delenv("AGENDA_URL", raising=False)
+    lead = Lead(id=1, cnpj="11.222.333/0001-44", tese="simples_ibs_cbs", razao_social="Empresa X",
+                email=None, status="ativo", criado_em="2026-10-01T00:00:00+00:00", telefone="21999998888")
+    texto = unquote(engine.montar_link_whatsapp(lead))
+    assert "[DIA]" not in texto and "[HORÁRIO" not in texto
+    assert "10h" in texto and "15h" in texto
+    assert "agenda" not in texto
+
+
+def test_link_whatsapp_inclui_link_da_agenda_quando_configurado(monkeypatch):
+    from urllib.parse import unquote
+    monkeypatch.setenv("AGENDA_URL", "https://exemplo.com/agenda")
+    lead = Lead(id=1, cnpj="11.222.333/0001-44", tese="simples_ibs_cbs", razao_social="Empresa X",
+                email=None, status="ativo", criado_em="2026-10-01T00:00:00+00:00", telefone="21999998888")
+    assert "https://exemplo.com/agenda" in unquote(engine.montar_link_whatsapp(lead))
