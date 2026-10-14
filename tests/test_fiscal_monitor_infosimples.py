@@ -7,12 +7,14 @@ from src.fiscal_monitor.infosimples import (
     ConsultaDebitosError,
     consultar_cnd_federal,
     consultar_cndt_trabalhista,
+    consultar_divida_ativa_pge_rj,
     consultar_lista_devedores,
     consultar_regularidade_fgts,
     enriquecer_com_dados_abertos,
     gerar_alertas_fiscais,
     montar_divida_ativa,
     montar_situacao_cndt,
+    montar_situacao_divida_ativa_pge_rj,
     montar_situacao_fgts,
     montar_situacao_fiscal,
 )
@@ -325,5 +327,50 @@ def test_gerar_alertas_fiscais_sem_alerta_cndt_quando_nao_consta():
     situacao_cndt = montar_situacao_cndt({"consta": False})
 
     alertas = gerar_alertas_fiscais(None, None, situacao_cndt=situacao_cndt)
+
+    assert alertas == []
+
+
+def test_consultar_divida_ativa_pge_rj_sends_cnpj_and_token():
+    session = MagicMock()
+    session.post.return_value = _mock_response(
+        200,
+        {
+            "code": 200, "code_message": "ok", "errors": [], "data_count": 1,
+            "data": [{"consta": True, "valor_total": 1500.75, "quantidade_debitos": 2}],
+        },
+    )
+
+    dados = consultar_divida_ativa_pge_rj("11.222.333/0001-44", "TOKEN123", session=session)
+
+    assert dados["consta"] is True
+    call_args, call_kwargs = session.post.call_args
+    assert call_args[0] == "https://api.infosimples.com/api/v2/consultas/pge-rj/divida-ativa"
+    assert call_kwargs["data"]["cnpj"] == "11222333000144"
+    assert call_kwargs["data"]["token"] == "TOKEN123"
+
+
+def test_montar_situacao_divida_ativa_pge_rj_parses_fields():
+    situacao = montar_situacao_divida_ativa_pge_rj(
+        {"consta": True, "valor_total": 1500.75, "quantidade_debitos": 2}
+    )
+
+    assert situacao.consta_divida is True
+    assert situacao.total_divida == 1500.75
+    assert situacao.quantidade_inscricoes == 2
+
+
+def test_gerar_alertas_fiscais_flags_divida_ativa_rj():
+    situacao_divida_rj = montar_situacao_divida_ativa_pge_rj({"consta": True, "valor_total": 1500.75})
+
+    alertas = gerar_alertas_fiscais(None, None, situacao_divida_rj=situacao_divida_rj)
+
+    assert any("Dívida Ativa do Estado do RJ" in a and "1.500,75" in a for a in alertas)
+
+
+def test_gerar_alertas_fiscais_sem_alerta_divida_rj_quando_nao_consta():
+    situacao_divida_rj = montar_situacao_divida_ativa_pge_rj({"consta": False})
+
+    alertas = gerar_alertas_fiscais(None, None, situacao_divida_rj=situacao_divida_rj)
 
     assert alertas == []

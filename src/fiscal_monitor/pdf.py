@@ -18,6 +18,7 @@ from src.common.pdf_styles import (
 from src.fiscal_monitor.infosimples import (
     DividaAtivaPgfn,
     SituacaoCndt,
+    SituacaoDividaAtivaPgeRj,
     SituacaoFgts,
     SituacaoFiscalPgfn,
     formatar_valor_brl,
@@ -92,11 +93,13 @@ def render_dossie_fiscal_pdf(
     divida_ativa: DividaAtivaPgfn | None = None,
     situacao_fgts: SituacaoFgts | None = None,
     situacao_cndt: SituacaoCndt | None = None,
+    situacao_divida_rj: SituacaoDividaAtivaPgeRj | None = None,
 ) -> None:
     """Dossiê consolidado de situação fiscal de um CNPJ já na carteira do
     escritório (diferente de `render_pre_analise_pdf`, que é pro fluxo de
     prospecção de lead) — reúne numa única PDF tudo que foi consultado ao
-    vivo na InfoSimples (CND federal, dívida ativa/PGFN, FGTS, CNDT).
+    vivo na InfoSimples (CND federal, dívida ativa/PGFN, FGTS, CNDT, dívida
+    ativa do RJ quando aplicável).
     """
 
     def _sim_nao(valor: bool | None) -> str:
@@ -156,6 +159,12 @@ def render_dossie_fiscal_pdf(
         if situacao_cndt.total_processos:
             story.append(Paragraph(f"Total de processos: {situacao_cndt.total_processos}", BODY_STYLE))
 
+    if situacao_divida_rj is not None:
+        story.append(Paragraph("Dívida Ativa do Estado do RJ (PGE-RJ)", HEADING_STYLE))
+        story.append(Paragraph(f"Consta dívida: {_sim_nao(situacao_divida_rj.consta_divida)}", BODY_STYLE))
+        if situacao_divida_rj.total_divida:
+            story.append(Paragraph(f"Total da dívida: R$ {formatar_valor_brl(situacao_divida_rj.total_divida)}", BODY_STYLE))
+
     story.append(Paragraph("Alertas", ALERT_HEADING_STYLE))
     for alerta in alertas:
         story.append(Paragraph(f"• {alerta}", BULLET_STYLE))
@@ -166,9 +175,10 @@ def render_dossie_fiscal_pdf(
     story.append(
         Paragraph(
             "Este dossiê consolida, numa única página, o resultado de consultas públicas realizadas "
-            "ao vivo via InfoSimples na data acima (situação fiscal/PGFN, dívida ativa, FGTS e CNDT). "
-            "Ele não substitui a certidão oficial emitida por cada órgão — pra anexar a via oficial em "
-            "PDF (ex.: pra apresentar a terceiros), use o envio manual na aba de certidões.",
+            "ao vivo via InfoSimples na data acima (situação fiscal/PGFN, dívida ativa, FGTS, CNDT e, "
+            "pra empresas do RJ, dívida ativa estadual/PGE-RJ). Ele não substitui a certidão oficial "
+            "emitida por cada órgão — pra anexar a via oficial em PDF (ex.: pra apresentar a terceiros), "
+            "use o envio manual na aba de certidões.",
             BODY_STYLE,
         )
     )
@@ -186,6 +196,7 @@ def render_pre_analise_pdf(
     divida_ativa: DividaAtivaPgfn | None = None,
     situacao_fgts: SituacaoFgts | None = None,
     situacao_cndt: SituacaoCndt | None = None,
+    situacao_divida_rj: SituacaoDividaAtivaPgeRj | None = None,
 ) -> None:
     story = []
     if logo_path:
@@ -260,13 +271,20 @@ def render_pre_analise_pdf(
         if situacao_cndt.total_processos:
             story.append(Paragraph(f"Total de processos: {situacao_cndt.total_processos}", BODY_STYLE))
 
+    if situacao_divida_rj is not None:
+        story.append(Paragraph("Dívida Ativa do Estado do RJ (PGE-RJ)", HEADING_STYLE))
+        story.append(Paragraph(f"Consta dívida: {_sim_nao(situacao_divida_rj.consta_divida)}", BODY_STYLE))
+        if situacao_divida_rj.total_divida:
+            story.append(Paragraph(f"Total da dívida: R$ {formatar_valor_brl(situacao_divida_rj.total_divida)}", BODY_STYLE))
+
     story.append(Paragraph("Alertas da pré-análise", ALERT_HEADING_STYLE))
     for alerta in alertas:
         story.append(Paragraph(f"• {alerta}", BULLET_STYLE))
 
     story.append(Spacer(1, 16))
     consultou_infosimples = any(
-        dado is not None for dado in (situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt)
+        dado is not None
+        for dado in (situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt, situacao_divida_rj)
     )
     nota_final = (
         "Esta pré-análise usa apenas dados públicos (situação cadastral, enquadramento "

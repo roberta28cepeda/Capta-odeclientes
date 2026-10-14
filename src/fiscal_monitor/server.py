@@ -22,12 +22,14 @@ from src.fiscal_monitor.infosimples import (
     ConsultaDebitosError,
     consultar_cnd_federal,
     consultar_cndt_trabalhista,
+    consultar_divida_ativa_pge_rj,
     consultar_lista_devedores,
     consultar_regularidade_fgts,
     enriquecer_com_dados_abertos,
     gerar_alertas_fiscais,
     montar_divida_ativa,
     montar_situacao_cndt,
+    montar_situacao_divida_ativa_pge_rj,
     montar_situacao_fgts,
     montar_situacao_fiscal,
 )
@@ -270,9 +272,15 @@ _CERTIDOES_TEMPLATE = page("Certidões — {{ cnpj.cnpj }}", """
 {% if certidoes %}<p><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/certidoes/unificado.pdf?token={{ request.args.get('token', '') }}">Baixar todas em um único PDF &rarr;</a></p>{% endif %}
 
 <h2>Dossiê fiscal automático</h2>
-<p>Consulta ao vivo na InfoSimples (CND federal, dívida ativa/PGFN, FGTS e CNDT) e gera um único PDF —
-não precisa upload manual. Cada consulta tem custo.</p>
+<p>Consulta ao vivo na InfoSimples (CND federal, dívida ativa/PGFN, FGTS, CNDT e, pra empresas do RJ,
+dívida ativa estadual/PGE-RJ) e gera um único PDF — não precisa upload manual. Cada consulta tem custo.</p>
 <p><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/certidoes/dossie-fiscal.pdf?token={{ request.args.get('token', '') }}">Baixar dossiê fiscal automático (PDF) &rarr;</a></p>
+
+<h2>Consulta manual</h2>
+<p>A Receita Federal bloqueia consulta automática de Atos e Fatos Declaratórios Executivos (ADE) com
+captcha — não dá pra automatizar. O CNPJ é <strong>{{ cnpj.cnpj }}</strong>, cole no campo da página oficial.</p>
+<p><a href="https://servicos.receita.fazenda.gov.br/servicos/editais/consultaEditais.aspx" target="_blank" rel="noopener">
+Abrir consulta de Atos Declaratórios Executivos (Receita Federal) &rarr;</a></p>
 
 <h2>Enviar certidão (PDF real)</h2>
 <form method="post" enctype="multipart/form-data" class="card">
@@ -865,6 +873,7 @@ def create_app(
         divida_ativa = None
         situacao_fgts = None
         situacao_cndt = None
+        situacao_divida_rj = None
         infosimples_token = os.environ.get("INFOSIMPLES_API_TOKEN")
         if infosimples_token:
             try:
@@ -893,7 +902,15 @@ def create_app(
             except ConsultaDebitosError as exc:
                 alertas.append(f"Não foi possível consultar CNDT (débitos trabalhistas): {exc}")
 
-            alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt)
+            if (analise.uf or "").strip().upper() == "RJ":
+                try:
+                    situacao_divida_rj = montar_situacao_divida_ativa_pge_rj(
+                        consultar_divida_ativa_pge_rj(cnpj, infosimples_token)
+                    )
+                except ConsultaDebitosError as exc:
+                    alertas.append(f"Não foi possível consultar Dívida Ativa do Estado do RJ (PGE-RJ): {exc}")
+
+            alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt, situacao_divida_rj)
 
         fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
@@ -907,6 +924,7 @@ def create_app(
             divida_ativa=divida_ativa,
             situacao_fgts=situacao_fgts,
             situacao_cndt=situacao_cndt,
+            situacao_divida_rj=situacao_divida_rj,
         )
 
         @after_this_request
@@ -984,6 +1002,11 @@ def create_app(
             resultado["cndt_trabalhista"] = consultar_cndt_trabalhista(cnpj, token)
         except ConsultaDebitosError as exc:
             resultado["cndt_trabalhista_erro"] = str(exc)
+
+        try:
+            resultado["divida_ativa_pge_rj"] = consultar_divida_ativa_pge_rj(cnpj, token)
+        except ConsultaDebitosError as exc:
+            resultado["divida_ativa_pge_rj_erro"] = str(exc)
 
         return jsonify(resultado)
 
@@ -1193,6 +1216,7 @@ def create_app(
         divida_ativa = None
         situacao_fgts = None
         situacao_cndt = None
+        situacao_divida_rj = None
         alertas: list[str] = []
 
         try:
@@ -1221,7 +1245,15 @@ def create_app(
         except ConsultaDebitosError as exc:
             alertas.append(f"Não foi possível consultar CNDT (débitos trabalhistas): {exc}")
 
-        alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt)
+        if (cnpj.uf or "").strip().upper() == "RJ":
+            try:
+                situacao_divida_rj = montar_situacao_divida_ativa_pge_rj(
+                    consultar_divida_ativa_pge_rj(cnpj.cnpj, token)
+                )
+            except ConsultaDebitosError as exc:
+                alertas.append(f"Não foi possível consultar Dívida Ativa do Estado do RJ (PGE-RJ): {exc}")
+
+        alertas += gerar_alertas_fiscais(situacao_fiscal, divida_ativa, situacao_fgts, situacao_cndt, situacao_divida_rj)
 
         fd, pdf_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
@@ -1235,6 +1267,7 @@ def create_app(
             divida_ativa=divida_ativa,
             situacao_fgts=situacao_fgts,
             situacao_cndt=situacao_cndt,
+            situacao_divida_rj=situacao_divida_rj,
         )
 
         @after_this_request

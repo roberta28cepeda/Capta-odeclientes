@@ -403,7 +403,9 @@ def test_pre_analise_includes_situacao_fiscal_when_infosimples_configured(app, m
         "src.fiscal_monitor.server.consultar_lista_devedores", return_value=None
     ) as mock_devedores, patch(
         "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
-    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ), patch("src.fiscal_monitor.server.consultar_divida_ativa_pge_rj", return_value={"consta": False}):
         response = app.test_client().post(
             "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
         )
@@ -411,6 +413,45 @@ def test_pre_analise_includes_situacao_fiscal_when_infosimples_configured(app, m
     assert response.status_code == 200
     mock_cnd.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
     mock_devedores.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+
+
+def test_pre_analise_consulta_divida_rj_quando_uf_e_rj(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=SAMPLE_CNPJ_RESPONSE), patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal", return_value={}
+    ), patch("src.fiscal_monitor.server.consultar_lista_devedores", return_value=None), patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ), patch(
+        "src.fiscal_monitor.server.consultar_divida_ativa_pge_rj", return_value={"consta": True, "valor_total": 500.0}
+    ) as mock_divida_rj:
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_divida_rj.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+
+
+def test_pre_analise_nao_consulta_divida_rj_quando_uf_nao_e_rj(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("INFOSIMPLES_API_TOKEN", "TOKEN123")
+    resposta_sp = dict(SAMPLE_CNPJ_RESPONSE, uf="SP")
+    with patch("src.fiscal_monitor.server.consultar_cnpj_publico", return_value=resposta_sp), patch(
+        "src.fiscal_monitor.server.consultar_cnd_federal", return_value={}
+    ), patch("src.fiscal_monitor.server.consultar_lista_devedores", return_value=None), patch(
+        "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ), patch("src.fiscal_monitor.server.consultar_divida_ativa_pge_rj") as mock_divida_rj:
+        response = app.test_client().post(
+            "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_divida_rj.assert_not_called()
 
 
 def test_pre_analise_still_generates_pdf_when_infosimples_falha(app, monkeypatch):
@@ -427,6 +468,9 @@ def test_pre_analise_still_generates_pdf_when_infosimples_falha(app, monkeypatch
         side_effect=ConsultaDebitosError("saldo insuficiente"),
     ), patch(
         "src.fiscal_monitor.server.consultar_cndt_trabalhista",
+        side_effect=ConsultaDebitosError("saldo insuficiente"),
+    ), patch(
+        "src.fiscal_monitor.server.consultar_divida_ativa_pge_rj",
         side_effect=ConsultaDebitosError("saldo insuficiente"),
     ):
         response = app.test_client().post(
@@ -457,7 +501,9 @@ def test_pre_analise_lista_devedores_still_runs_when_cnd_federal_falha(app, monk
         "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
     ), patch(
         "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
-    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ), patch("src.fiscal_monitor.server.consultar_divida_ativa_pge_rj", return_value={"consta": False}):
         response = app.test_client().post(
             "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
         )
@@ -484,7 +530,9 @@ def test_pre_analise_enriquece_divida_ativa_com_dados_abertos(app, monkeypatch):
         "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
     ) as mock_enriquecer, patch(
         "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
-    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ), patch("src.fiscal_monitor.server.consultar_divida_ativa_pge_rj", return_value={"consta": False}):
         response = app.test_client().post(
             "/pre-analise", data={"cnpj": "33.000.167/0001-01"}, headers=_basic_auth_header("admin", "senha-secreta")
         )
@@ -792,6 +840,13 @@ def test_certidoes_lists_federal_as_required_without_uf(app):
     assert b"sem certid" in response.data
 
 
+def test_certidoes_shows_manual_ade_link(app):
+    response = app.test_client().get(_cnpj_url(app, "/certidoes"))
+    assert response.status_code == 200
+    assert b"consultaEditais.aspx" in response.data
+    assert b"11.222.333/0001-44" in response.data
+
+
 def test_certidoes_post_uploads_pdf(app, db_path):
     response = app.test_client().post(
         _cnpj_url(app, "/certidoes"),
@@ -909,7 +964,9 @@ def test_dossie_fiscal_automatico_cnd_falha_nao_bloqueia_as_demais(app, monkeypa
         "src.fiscal_monitor.server.enriquecer_com_dados_abertos", wraps=lambda conn, divida: divida
     ), patch(
         "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
-    ), patch("src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}):
+    ), patch(
+        "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
+    ), patch("src.fiscal_monitor.server.consultar_divida_ativa_pge_rj", return_value={"consta": False}):
         response = app.test_client().get(_cnpj_url(app, "/certidoes/dossie-fiscal.pdf"))
 
     assert response.status_code == 200
@@ -1041,7 +1098,9 @@ def test_diagnostico_infosimples_calls_real_functions_and_returns_raw_response(a
         "src.fiscal_monitor.server.consultar_regularidade_fgts", return_value={"situacao": "REGULAR"}
     ) as mock_fgts, patch(
         "src.fiscal_monitor.server.consultar_cndt_trabalhista", return_value={"consta": False}
-    ) as mock_cndt:
+    ) as mock_cndt, patch(
+        "src.fiscal_monitor.server.consultar_divida_ativa_pge_rj", return_value={"consta": False}
+    ) as mock_divida_rj:
         response = app.test_client().get(
             "/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01",
             headers=_basic_auth_header("admin", "senha-secreta"),
@@ -1054,10 +1113,12 @@ def test_diagnostico_infosimples_calls_real_functions_and_returns_raw_response(a
     assert data["lista_devedores"] is None
     assert data["regularidade_fgts"]["situacao"] == "REGULAR"
     assert data["cndt_trabalhista"]["consta"] is False
+    assert data["divida_ativa_pge_rj"]["consta"] is False
     mock_cnd.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
     mock_devedores.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
     mock_fgts.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
     mock_cndt.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
+    mock_divida_rj.assert_called_once_with("33.000.167/0001-01", "TOKEN123")
 
 
 def test_diagnostico_infosimples_surfaces_consulta_error(app, monkeypatch):
@@ -1072,6 +1133,8 @@ def test_diagnostico_infosimples_surfaces_consulta_error(app, monkeypatch):
         "src.fiscal_monitor.server.consultar_regularidade_fgts", side_effect=ConsultaDebitosError("saldo insuficiente")
     ), patch(
         "src.fiscal_monitor.server.consultar_cndt_trabalhista", side_effect=ConsultaDebitosError("saldo insuficiente")
+    ), patch(
+        "src.fiscal_monitor.server.consultar_divida_ativa_pge_rj", side_effect=ConsultaDebitosError("saldo insuficiente")
     ):
         response = app.test_client().get(
             "/admin/diagnostico/infosimples?cnpj=33.000.167/0001-01",

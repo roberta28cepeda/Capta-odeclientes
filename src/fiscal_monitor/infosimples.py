@@ -7,7 +7,7 @@ revendedora paga que automatiza essas consultas nos sites oficiais e
 devolve JSON. Usada só quando `INFOSIMPLES_API_TOKEN` está configurada —
 sem isso, a pré-análise segue funcionando normal, só sem essa seção.
 
-Quatro produtos, mesma conta/token:
+Cinco produtos, mesma conta/token:
 
 - CND Federal (`/receita-federal/pgfn/nova`): emite uma nova Certidão de
   Débitos Relativos a Créditos Tributários Federais e à Dívida Ativa da
@@ -20,6 +20,14 @@ Quatro produtos, mesma conta/token:
   Caixa.
 - CNDT (`/tst/cndt`): Certidão Negativa de Débitos Trabalhistas do TST —
   diz se há débito/processo trabalhista em aberto.
+- Dívida Ativa do Estado do RJ (`/pge-rj/divida-ativa`): consulta pública
+  (só CNPJ, sem certificado digital) à Procuradoria Geral do Estado do Rio
+  de Janeiro — só roda quando a empresa é do RJ (ver `uf` da pré-análise),
+  já que é uma fonte estadual. Endpoint/campos não puderam ser confirmados
+  contra a documentação oficial (acesso à infosimples.com bloqueado neste
+  ambiente) — implementado de forma defensiva, com `.get()` em todo campo;
+  se o nome de algum campo estiver errado, a consulta ainda funciona mas
+  os dados vêm `None`. Testar em produção e reportar se precisar ajustar.
 
 Cada chamada tem custo (~R$0,10 + taxa base por consulta, cobrado do
 saldo da conta InfoSimples) — por isso só roda quando a integração está
@@ -40,6 +48,7 @@ INFOSIMPLES_CND_URL = "https://api.infosimples.com/api/v2/consultas/receita-fede
 INFOSIMPLES_DEVEDORES_URL = "https://api.infosimples.com/api/v2/consultas/receita-federal/pgfn/devedores"
 INFOSIMPLES_FGTS_URL = "https://api.infosimples.com/api/v2/consultas/caixa/regularidade"
 INFOSIMPLES_CNDT_URL = "https://api.infosimples.com/api/v2/consultas/tst/cndt"
+INFOSIMPLES_PGE_RJ_DIVIDA_URL = "https://api.infosimples.com/api/v2/consultas/pge-rj/divida-ativa"
 
 # Timeout que a própria InfoSimples usa pra esperar o site de origem (gov.br)
 # responder — pode ser lento. Mantido bem abaixo do limite de function do
@@ -104,6 +113,14 @@ class SituacaoCndt:
     validade_data: str | None
 
 
+@dataclass
+class SituacaoDividaAtivaPgeRj:
+    consta_divida: bool | None
+    total_divida: float | None
+    quantidade_inscricoes: int | None
+    mensagem: str | None
+
+
 def _post_infosimples(url: str, cnpj: str, token: str, session: requests.Session | None = None) -> dict:
     session = session or requests.Session()
     try:
@@ -159,6 +176,15 @@ def consultar_cndt_trabalhista(cnpj: str, token: str, session: requests.Session 
     return dados[0] if dados else {}
 
 
+def consultar_divida_ativa_pge_rj(cnpj: str, token: str, session: requests.Session | None = None) -> dict:
+    """Consulta a Dívida Ativa do Estado do RJ (PGE-RJ) na InfoSimples —
+    consulta pública, só por CNPJ, sem exigir certificado digital.
+    """
+    corpo = _post_infosimples(INFOSIMPLES_PGE_RJ_DIVIDA_URL, cnpj, token, session=session)
+    dados = corpo.get("data") or []
+    return dados[0] if dados else {}
+
+
 def montar_situacao_fiscal(dados: dict) -> SituacaoFiscalPgfn:
     return SituacaoFiscalPgfn(
         conseguiu_certidao_negativa=dados.get("conseguiu_emitir_certidao_negativa"),
@@ -209,6 +235,15 @@ def montar_situacao_cndt(dados: dict) -> SituacaoCndt:
     )
 
 
+def montar_situacao_divida_ativa_pge_rj(dados: dict) -> SituacaoDividaAtivaPgeRj:
+    return SituacaoDividaAtivaPgeRj(
+        consta_divida=dados.get("consta"),
+        total_divida=dados.get("valor_total"),
+        quantidade_inscricoes=dados.get("quantidade_debitos") or dados.get("quantidade_inscricoes"),
+        mensagem=dados.get("mensagem"),
+    )
+
+
 def formatar_valor_brl(valor: float) -> str:
     return f"{valor:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
 
@@ -252,6 +287,7 @@ def gerar_alertas_fiscais(
     divida_ativa: DividaAtivaPgfn | None,
     situacao_fgts: SituacaoFgts | None = None,
     situacao_cndt: SituacaoCndt | None = None,
+    situacao_divida_rj: SituacaoDividaAtivaPgeRj | None = None,
 ) -> list[str]:
     """Alertas com base em débito/dívida ativa real — complementa
     `preanalise.gerar_alertas`, que só olha dado cadastral.
@@ -290,5 +326,11 @@ def gerar_alertas_fiscais(
     if situacao_cndt and situacao_cndt.consta_debito:
         detalhe = f" ({situacao_cndt.total_processos} processo(s))" if situacao_cndt.total_processos else ""
         alertas.append(f"Débitos trabalhistas identificados na Justiça do Trabalho (CNDT/TST){detalhe}.")
+
+    if situacao_divida_rj and situacao_divida_rj.consta_divida:
+        detalhe_valor = (
+            f" — R$ {formatar_valor_brl(situacao_divida_rj.total_divida)}" if situacao_divida_rj.total_divida else ""
+        )
+        alertas.append(f"Inscrito na Dívida Ativa do Estado do RJ (PGE-RJ){detalhe_valor}.")
 
     return alertas
