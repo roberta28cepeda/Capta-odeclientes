@@ -226,6 +226,13 @@ def rodar_diario(
             leads_enviados.append(lead)
         except Exception as exc:
             erros.append({"lead_id": lead.id, "cnpj": lead.cnpj, "tese": lead.tese, "erro": str(exc)})
+            # Um erro de banco (deadlock, violação de constraint etc.) deixa a
+            # transação do Postgres "abortada" — sem isso, toda consulta
+            # seguinte na mesma conexão falha com "current transaction is
+            # aborted", derrubando em cascata todos os próximos leads do loop
+            # mesmo sem nenhum problema real com eles (confirmado em
+            # produção: um deadlock isolado travou os 2 leads seguintes).
+            conn.rollback()
     return {"leads_verificados": len(leads_e_tipos), "enviados": enviados, "erros": erros, "leads_enviados": leads_enviados}
 
 

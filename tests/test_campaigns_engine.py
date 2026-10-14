@@ -222,6 +222,44 @@ def test_rodar_diario_sends_to_all_pending_leads_and_tracks_errors():
     assert len(resultado["erros"]) == 1
 
 
+def test_rodar_diario_rolls_back_connection_after_error_so_next_lead_still_sends():
+    """Regressão: um erro de banco (ex: deadlock do Postgres) deixa a
+    transação "abortada" até um rollback explícito — sem isso, toda consulta
+    seguinte na mesma conexão falha em cascata, mesmo pra leads sem nenhum
+    problema real. Confirmado em produção: um deadlock isolado derrubou os 2
+    próximos leads do mesmo lote.
+    """
+    class _ConnComRollbackContado:
+        """sqlite3.Connection não aceita monkeypatch direto (tipo imutável em
+        C) — um proxy fino conta as chamadas de rollback sem mudar nenhum
+        outro comportamento."""
+
+        def __init__(self, real_conn):
+            self._real = real_conn
+            self.chamadas_rollback = 0
+
+        def rollback(self):
+            self.chamadas_rollback += 1
+            self._real.rollback()
+
+        def __getattr__(self, nome):
+            return getattr(self._real, nome)
+
+    conn_real = _conn()
+    conn = _ConnComRollbackContado(conn_real)
+    storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y", email="y@exemplo.com")
+
+    with patch(
+        "src.campaigns.engine.send_email_html", side_effect=[RuntimeError("deadlock detected"), None]
+    ):
+        resultado = engine.rodar_diario(conn, "https://exemplo.com", "smtp.host", 587, "user", "pass")
+
+    assert resultado["enviados"] == 1
+    assert len(resultado["erros"]) == 1
+    assert conn.chamadas_rollback == 1
+
+
 def test_rodar_diario_stops_when_orcamento_de_tempo_estoura():
     conn = _conn()
     storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
