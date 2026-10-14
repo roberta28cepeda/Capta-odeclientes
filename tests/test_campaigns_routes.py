@@ -370,6 +370,93 @@ def test_cron_campanhas_skips_whatsapp_digest_without_env_var(app, monkeypatch, 
     assert data["resumo_whatsapp_enviado"] is False
 
 
+def test_cron_campanhas_whatsapp_digest_includes_backlog_not_just_this_run(app, monkeypatch, campaigns_db_path):
+    """Regressão: o telefone de um lead costuma ser achado numa execução do
+    cron diferente da que mandou o e-mail dele (buscas rodam em orçamentos
+    de tempo separados) — o resumo precisa cobrir todo mundo pendente de
+    WhatsApp, não só quem foi enviado *nesta* chamada específica, senão o
+    resumo quase nunca chega (era exatamente isso que estava acontecendo).
+    """
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+    monkeypatch.setenv("WHATSAPP_EQUIPE_EMAIL", "equipe@exemplo.com")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    # Lead de uma execução anterior: já foi enviado, telefone já achado,
+    # ainda não contatado — não é tocado por este cron (já tem e-mail).
+    lead_antigo = campaigns_storage.create_lead(
+        conn, "11.222.333/0001-44", TESE, razao_social="Empresa Antiga", email="antiga@exemplo.com"
+    )
+    campaigns_storage.set_lead_telefone(conn, lead_antigo.id, "11911112222")
+    # Lead novo, que só recebe e-mail agora, nesta execução — telefone dele
+    # não é buscado nesse fluxo (sem EXA/ReceitaWS mockado pra ele aqui).
+    campaigns_storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Nova", email="nova@exemplo.com")
+
+    with patch("src.campaigns.engine.send_email_html"), patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None
+    ), patch("src.campaigns.engine.send_email") as mock_send_equipe, patch(
+        "src.campaigns.engine.enviar_relatorio_semanal"
+    ):
+        response = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    assert response.status_code == 200
+    assert response.get_json()["resumo_whatsapp_enviado"] is True
+    mock_send_equipe.assert_called_once()
+    corpo_resumo = mock_send_equipe.call_args[0][2]
+    assert "Empresa Antiga" in corpo_resumo
+
+
+def test_cron_campanhas_does_not_duplicate_whatsapp_digest_same_day(app, monkeypatch, campaigns_db_path):
+    """O cron dispara várias vezes por dia (cada execução processa só o que
+    cabe no orçamento de tempo dela) — o resumo de WhatsApp não pode sair
+    de novo a cada chamada do mesmo dia."""
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+    monkeypatch.setenv("WHATSAPP_EQUIPE_EMAIL", "equipe@exemplo.com")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    campaigns_storage.set_lead_telefone(conn, lead.id, "11911112222")
+
+    with patch("src.campaigns.engine.send_email_html"), patch(
+        "src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None
+    ), patch("src.campaigns.engine.send_email") as mock_send_equipe, patch(
+        "src.campaigns.engine.enviar_relatorio_semanal"
+    ):
+        primeira = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+        segunda = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    assert primeira.get_json()["resumo_whatsapp_enviado"] is True
+    assert segunda.get_json()["resumo_whatsapp_enviado"] is False
+    mock_send_equipe.assert_called_once()
+
+
+def test_cron_campanhas_does_not_duplicate_relatorio_semanal_same_day(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("CRON_SECRET", "segredo")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+    import datetime
+
+    with patch("src.campaigns.engine.buscar_telefone_por_cnpj", return_value=None), patch(
+        "src.campaigns.routes.date"
+    ) as mock_date, patch("src.campaigns.engine.enviar_relatorio_semanal") as mock_relatorio:
+        mock_date.today.return_value = datetime.date(2026, 10, 5)  # segunda-feira
+        primeira = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+        segunda = app.test_client().get("/cron/campanhas/rodar?secret=segredo")
+
+    assert primeira.get_json()["relatorio_semanal_enviado"] is True
+    assert segunda.get_json()["relatorio_semanal_enviado"] is False
+    mock_relatorio.assert_called_once()
+
+
 def test_rodar_agora_requires_admin(app):
     response = app.test_client().get("/admin/campanhas/rodar-agora")
     assert response.status_code == 401

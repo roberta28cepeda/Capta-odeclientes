@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import secrets
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import psycopg2
 import psycopg2.extras
@@ -63,6 +63,13 @@ CREATE TABLE IF NOT EXISTS campanha_templates (
     link_cta TEXT NOT NULL DEFAULT '',
     rodape_nota TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (tese, tipo)
+);
+
+CREATE TABLE IF NOT EXISTS campanha_notificacoes_diarias (
+    tipo TEXT NOT NULL,
+    data TEXT NOT NULL,
+    enviado_em TEXT NOT NULL,
+    PRIMARY KEY (tipo, data)
 );
 """
 
@@ -288,6 +295,33 @@ def set_lead_whatsapp_contatado(conn, lead_id: int) -> None:
     contatado_em = datetime.now(timezone.utc).isoformat()
     with conn.cursor() as cur:
         cur.execute("UPDATE campanha_leads SET whatsapp_contatado_em = %s WHERE id = %s", (contatado_em, lead_id))
+    conn.commit()
+
+
+def ja_notificado_hoje(conn, tipo: str, hoje: date | None = None) -> bool:
+    """Evita duplicar um e-mail de notificação (resumo de WhatsApp,
+    relatório semanal) quando o cron diário dispara mais de uma vez no
+    mesmo dia — ver `marcar_notificado_hoje`."""
+    data = (hoje or date.today()).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM campanha_notificacoes_diarias WHERE tipo = %s AND data = %s", (tipo, data)
+        )
+        return cur.fetchone() is not None
+
+
+def marcar_notificado_hoje(conn, tipo: str, hoje: date | None = None) -> None:
+    data = (hoje or date.today()).isoformat()
+    enviado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO campanha_notificacoes_diarias (tipo, data, enviado_em)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (tipo, data) DO NOTHING
+            """,
+            (tipo, data, enviado_em),
+        )
     conn.commit()
 
 

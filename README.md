@@ -680,7 +680,7 @@ diferentes (planilhas separadas), tratado como lead independente em cada.
 - `/admin/campanhas/leads/importar` — importa CSV pra uma tese (escolhida no formulário) direto pelo navegador.
 - `/admin/campanhas/templates?tese=<slug>` — edita cada campo do e-mail (tag, título, parágrafos, checklist, frase de urgência, texto/link do botão, nota de rodapé) daquela tese, pros 2 tipos (inicial + follow-up). Mesmo design visual da Leactis sempre no inicial; o follow-up sai como texto puro (só os campos de texto do template são usados, sem HTML).
 - `/admin/campanhas/whatsapp` — o "cartão" de contato: mostra um lead pendente de WhatsApp por vez (com telefone já achado), com o link `wa.me` pronto e um botão "marquei como contatado" — ver seção "WhatsApp" abaixo.
-- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): busca e-mail pros leads que ainda não têm (se `EXA_API_KEY` configurada) e telefone via ReceitaWS (sempre, é gratuita); roda o envio do dia pra todo lead pendente, respeitando o limite de 10/dia por tese; manda o resumo de WhatsApp pra equipe (se `WHATSAPP_EQUIPE_EMAIL` configurada); e às segundas-feiras também dispara o relatório semanal (com detalhamento por tese) pro e-mail em `RELATORIO_SEMANAL_EMAIL`. Já declarado em `vercel.json` (`0 12 * * *`, meio-dia UTC = 9h em Brasília) — tudo automático, sem precisar rodar nada pelo terminal em produção.
+- `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): busca e-mail pros leads que ainda não têm (se `EXA_API_KEY` configurada) e telefone via ReceitaWS (sempre, é gratuita); roda o envio do dia pra todo lead pendente, respeitando o limite de 10/dia por tese; manda o resumo de WhatsApp pra equipe (se `WHATSAPP_EQUIPE_EMAIL` configurada); e às segundas-feiras também dispara o relatório semanal (com detalhamento por tese) pro e-mail em `RELATORIO_SEMANAL_EMAIL`. **Não** está mais declarado em `vercel.json` (ver "Checagem automática agendada" acima) — chamado por um agendador externo (cron-job.org), várias vezes por dia (cada chamada processa só o que cabe no orçamento de tempo dela, o resto fica pendente pra próxima). O resumo de WhatsApp e o relatório semanal só saem **uma vez por dia** mesmo com várias chamadas (dedupe via `campanha_notificacoes_diarias`), e o resumo sempre lista a fila completa de pendentes (`leads_pendentes_whatsapp`) — não só quem foi enviado na chamada atual, já que telefone costuma ser achado numa chamada diferente da do e-mail.
 
 ### WhatsApp (nunca automático, por decisão de política)
 
@@ -691,10 +691,13 @@ número da Leactis ser banido. Em vez disso, o sistema automatiza só a
 preparação:
 
 1. Busca o telefone de cada lead via ReceitaWS (automático, no cron diário).
-2. Depois do envio de e-mail do dia, se `WHATSAPP_EQUIPE_EMAIL` estiver
-   configurada, manda um e-mail resumo pra essa caixa com os leads do dia
-   que têm telefone, cada um com um link `wa.me` já com mensagem
-   pré-escrita.
+2. Uma vez por dia, se `WHATSAPP_EQUIPE_EMAIL` estiver configurada, manda
+   um e-mail resumo pra essa caixa com **todos** os leads pendentes de
+   WhatsApp (telefone já achado, ainda não marcados como contatados) —
+   os mesmos contatos que já receberam e-mail da campanha, com um link
+   `wa.me` já com mensagem pré-escrita pra cada um. Fica pendente até
+   alguém marcar como contatado (passo 3) — não se perde se o telefone
+   só for achado num dia depois do e-mail.
 3. Alguém da equipe abre `/admin/campanhas/whatsapp` (o "cartão"), clica
    no link do lead atual pra abrir o WhatsApp de verdade e manda a
    mensagem manualmente, depois marca "marquei como contatado" — o lead

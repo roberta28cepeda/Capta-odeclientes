@@ -344,3 +344,27 @@ def test_set_lead_whatsapp_contatado_removes_from_pendentes():
 
     assert storage.leads_pendentes_whatsapp(conn) == []
     assert storage.get_lead(conn, lead.id).whatsapp_contatado_em is not None
+
+
+def test_ja_notificado_hoje_false_until_marcado():
+    conn = _conn()
+    assert storage.ja_notificado_hoje(conn, "resumo_whatsapp") is False
+
+    storage.marcar_notificado_hoje(conn, "resumo_whatsapp")
+
+    assert storage.ja_notificado_hoje(conn, "resumo_whatsapp") is True
+
+
+def test_ja_notificado_hoje_is_isolado_por_tipo():
+    conn = _conn()
+    storage.marcar_notificado_hoje(conn, "resumo_whatsapp")
+
+    assert storage.ja_notificado_hoje(conn, "relatorio_semanal") is False
+
+
+def test_marcar_notificado_hoje_eh_idempotente():
+    conn = _conn()
+    storage.marcar_notificado_hoje(conn, "resumo_whatsapp")
+    storage.marcar_notificado_hoje(conn, "resumo_whatsapp")  # não deve estourar erro de PK duplicada
+
+    assert storage.ja_notificado_hoje(conn, "resumo_whatsapp") is True

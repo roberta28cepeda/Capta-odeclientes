@@ -454,23 +454,39 @@ def _executar_campanha_diaria() -> dict:
         conn, base_url, smtp_host, int(smtp_port), smtp_username, smtp_password, smtp_from=smtp_from,
         orcamento_segundos=tempo_restante(),
     )
-    leads_enviados_hoje = resultado.pop("leads_enviados")
+    resultado.pop("leads_enviados")
     resultado["busca_email"] = busca_email
     resultado["busca_telefone"] = busca_telefone
 
+    # O cron roda várias vezes por dia (cada execução processa só o que
+    # cabe no orçamento de tempo dela — ver TEMPO_LIMITE_TOTAL_SEGUNDOS).
+    # Por isso o resumo de WhatsApp NÃO pode olhar só pros leads enviados
+    # *nesta* execução: o telefone de um lead muitas vezes só é achado numa
+    # execução seguinte à do e-mail dele, então filtrar por "enviado agora
+    # + já tinha telefone" quase nunca dava match (era basicamente isso que
+    # fazia o resumo não chegar na prática). `leads_pendentes_whatsapp` é a
+    # fila de verdade — todo lead ativo com telefone achado e ainda não
+    # contatado, exatamente os mesmos contatos que já receberam e-mail da
+    # campanha — e `ja_notificado_hoje`/`marcar_notificado_hoje` garantem
+    # que ela só sai uma vez por dia, mesmo com várias execuções do cron.
     whatsapp_equipe_email = os.environ.get("WHATSAPP_EQUIPE_EMAIL")
-    leads_com_telefone = [lead for lead in leads_enviados_hoje if lead.telefone]
-    if whatsapp_equipe_email and leads_com_telefone:
-        engine.enviar_resumo_whatsapp_equipe(
-            conn, leads_com_telefone, whatsapp_equipe_email, base_url, smtp_host, int(smtp_port), smtp_username,
-            smtp_password, smtp_from=smtp_from,
-        )
-    resultado["resumo_whatsapp_enviado"] = bool(whatsapp_equipe_email and leads_com_telefone)
+    resumo_whatsapp_enviado = False
+    if whatsapp_equipe_email and not storage.ja_notificado_hoje(conn, "resumo_whatsapp"):
+        leads_pendentes = storage.leads_pendentes_whatsapp(conn)
+        if leads_pendentes:
+            engine.enviar_resumo_whatsapp_equipe(
+                conn, leads_pendentes, whatsapp_equipe_email, base_url, smtp_host, int(smtp_port), smtp_username,
+                smtp_password, smtp_from=smtp_from,
+            )
+            storage.marcar_notificado_hoje(conn, "resumo_whatsapp")
+            resumo_whatsapp_enviado = True
+    resultado["resumo_whatsapp_enviado"] = resumo_whatsapp_enviado
 
     relatorio_enviado = False
-    if date.today().weekday() == 0:  # segunda-feira
+    if date.today().weekday() == 0 and not storage.ja_notificado_hoje(conn, "relatorio_semanal"):  # segunda-feira
         destinatario = os.environ.get("RELATORIO_SEMANAL_EMAIL") or smtp_username
         engine.enviar_relatorio_semanal(conn, destinatario, smtp_host, int(smtp_port), smtp_username, smtp_password, smtp_from=smtp_from)
+        storage.marcar_notificado_hoje(conn, "relatorio_semanal")
         relatorio_enviado = True
 
     resultado["relatorio_semanal_enviado"] = relatorio_enviado
