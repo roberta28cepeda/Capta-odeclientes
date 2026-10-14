@@ -570,13 +570,18 @@ cadastrados de uma vez e dispara WhatsApp/e-mail pra quem tiver contato e
 credenciais configuradas — erro num tenant não trava a checagem dos
 demais.
 
-No Vercel, `vercel.json` já declara o cron (`0 8 * * *` — todo dia às 8h
-UTC); o Vercel injeta sozinho o header `Authorization: Bearer
-$CRON_SECRET` na chamada, então só falta configurar a variável
-`CRON_SECRET` no projeto. **Atenção:** no plano Hobby do Vercel, cron job
-só roda no máximo uma vez por dia — pra checagem mais frequente é preciso
-plano Pro, ou chamar o endpoint por um scheduler externo (`?secret=...`
-na query string, pra quem não manda o header Authorization).
+**O Vercel Cron nativo (`vercel.json`) foi removido** — nos testes em
+produção ele ficou 24h sem disparar nenhuma vez, mesmo configurado
+certo (plano Hobby é pouco confiável pra isso). Os dois endpoints de
+cron (`/cron/check-all` e `/cron/campanhas/rodar`) continuam no ar,
+protegidos por `CRON_SECRET`, mas agora dependem de um **agendador
+externo** chamando a URL com `?secret=$CRON_SECRET` na query string
+(usamos o [cron-job.org](https://cron-job.org), gratuito, bem mais
+confiável pra esse tipo de agendamento simples). Sem esse agendador
+configurado e ativo, **nada dispara sozinho** — nem a checagem fiscal,
+nem o envio diário da campanha de leads. O botão manual de admin
+(`/admin/campanhas/rodar-agora`) sempre funciona como alternativa,
+independente do agendador externo estar ativo ou não.
 
 Esse endpoint não importa snapshot novo — só roda o alerta sobre o que já
 foi importado (igual `--check` no CLI); a importação de achados
