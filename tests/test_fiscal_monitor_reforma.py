@@ -26,3 +26,28 @@ def test_simular_handles_zero_faturamento():
     assert resultado.unificado == 0.0
     assert resultado.hibrido == 0.0
     assert resultado.diferenca == 0.0
+    assert resultado.diferenca_pct == 0.0
+
+
+def test_simular_includes_breakdown_mensal():
+    resultado = simular(1_200_000.0)
+
+    assert round(resultado.faturamento_mensal, 2) == 100_000.0
+    assert round(resultado.unificado_mensal, 2) == round(resultado.unificado / 12, 2)
+    assert round(resultado.hibrido_mensal, 2) == round(resultado.hibrido / 12, 2)
+    assert round(resultado.diferenca_mensal, 2) == round(resultado.diferenca / 12, 2)
+
+
+def test_simular_breaks_down_hibrido_em_das_e_iva():
+    resultado = simular(1_000_000.0)
+
+    assert round(resultado.hibrido_das, 2) == 58_500.0
+    assert round(resultado.hibrido_iva, 2) == 4_500.0
+    assert round(resultado.hibrido_das + resultado.hibrido_iva, 2) == round(resultado.hibrido, 2)
+
+
+def test_simular_calcula_diferenca_pct():
+    resultado = simular(1_000_000.0)
+
+    maior = max(resultado.unificado, resultado.hibrido)
+    assert round(resultado.diferenca_pct, 2) == round(resultado.diferenca / maior * 100, 2)

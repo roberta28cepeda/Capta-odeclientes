@@ -1017,6 +1017,20 @@ def test_reforma_tributaria_simulates_with_faturamento(app, monkeypatch):
     assert "Híbrido".encode() in response.data
 
 
+def test_reforma_tributaria_explains_ibs_cbs_e_mostra_detalhamento(app, monkeypatch):
+    """Antes a página só mostrava dois números sem contexto — nada explicando
+    o que é IBS/CBS/Híbrido nem detalhando de onde vinha o valor."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get(
+        "/reforma-tributaria?faturamento=1000000", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 200
+    assert b"CBS" in response.data
+    assert b"IBS" in response.data
+    assert "Simples Unificado".encode() in response.data
+    assert "mês".encode() in response.data  # valor mensal, não só o anual
+
+
 def _xlsx_dados_abertos_bytes(numero_inscricao="FGAL1") -> bytes:
     import openpyxl
     from datetime import date

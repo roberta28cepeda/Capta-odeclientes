@@ -314,21 +314,72 @@ Abrir consulta de Atos Declaratórios Executivos (Receita Federal) &rarr;</a></p
 
 _REFORMA_TEMPLATE = page("Simulador da Reforma Tributária", """
 <p><a href="/tenants">&larr; voltar</a></p>
-<h1>Simulador da Reforma Tributária (ilustrativo)</h1>
-<div class="alert">{{ resultado.aviso if resultado else "Valores ilustrativos (placeholders), não use para cálculo real nem para orientar cliente sem validar com um contador." }}</div>
+<h1>Simulador da Reforma Tributária</h1>
+<p class="lede">Compara, pra um faturamento anual informado, quanto a empresa pagaria em dois
+cenários possíveis depois da reforma — pra ajudar a conversa com o cliente, não pra
+substituir o cálculo oficial.</p>
+
+<div class="card">
+<h2>O que está sendo comparado</h2>
+<p>A Reforma Tributária substitui PIS, Cofins, IPI, ICMS e ISS por dois novos tributos
+sobre valor agregado: a <strong>CBS</strong> (Contribuição sobre Bens e Serviços, federal)
+e o <strong>IBS</strong> (Imposto sobre Bens e Serviços, estadual/municipal) — juntos,
+"IVA Dual". Empresas do Simples Nacional (que hoje pagam tudo junto na guia do
+<strong>DAS</strong>) podem optar por dois caminhos quando a reforma estiver em vigor:</p>
+<ul>
+  <li><strong>Simples Unificado</strong> — continua pagando tudo numa alíquota única,
+  agora já embutindo CBS e IBS dentro do DAS.</li>
+  <li><strong>Híbrido</strong> — mantém o DAS atual (sem CBS/IBS) e paga CBS+IBS "por
+  fora", separadamente, sobre o faturamento — útil principalmente pra quem vende pra
+  outras empresas e quer gerar crédito de IVA pro cliente.</li>
+</ul>
+<p>Esse simulador estima os dois caminhos lado a lado, com a mesma lógica (percentual
+sobre o faturamento) usada no protótipo original.</p>
+</div>
+
+<div class="alert">{{ resultado.aviso if resultado else "Valores ilustrativos (placeholders) — a regulamentação final da reforma ainda está em tramitação. Não use para cálculo real nem para orientar cliente sem validar com um contador." }}</div>
+
 <form method="get" class="card">
   <label>Faturamento anual (R$ {{ faturamento_min }} a R$ {{ faturamento_max }})
     <input type="number" name="faturamento" min="{{ faturamento_min }}" max="{{ faturamento_max }}" step="1000" value="{{ resultado.faturamento if resultado else '' }}" required>
   </label>
   <button type="submit">Simular</button>
 </form>
+
 {% if resultado %}
+<div class="card">
+<h2>Resultado da simulação</h2>
+<p class="lede">Faturamento informado: <strong>R$ {{ "{:,.2f}".format(resultado.faturamento).replace(",", "X").replace(".", ",").replace("X", ".") }}</strong>/ano
+(R$ {{ "{:,.2f}".format(resultado.faturamento_mensal).replace(",", "X").replace(".", ",").replace("X", ".") }}/mês em média).</p>
 <table>
-<tr><th>Regime</th><th>Valor estimado</th></tr>
-<tr{% if resultado.melhor == "unificado" %} style="font-weight:bold"{% endif %}><td>Simples Unificado</td><td>R$ {{ "%.2f"|format(resultado.unificado) }}</td></tr>
-<tr{% if resultado.melhor == "hibrido" %} style="font-weight:bold"{% endif %}><td>Híbrido</td><td>R$ {{ "%.2f"|format(resultado.hibrido) }}</td></tr>
+<tr><th>Regime</th><th>Composição</th><th>Valor mensal (média)</th><th>Valor anual</th></tr>
+<tr{% if resultado.melhor == "unificado" %} style="background:#edf9f0"{% endif %}>
+  <td><strong>Simples Unificado</strong></td>
+  <td>DAS com CBS+IBS embutidos ({{ "%.2f"|format(6.35) }}%)</td>
+  <td>R$ {{ "%.2f"|format(resultado.unificado_mensal) }}</td>
+  <td>R$ {{ "%.2f"|format(resultado.unificado) }}</td>
+</tr>
+<tr{% if resultado.melhor == "hibrido" %} style="background:#edf9f0"{% endif %}>
+  <td><strong>Híbrido</strong></td>
+  <td>DAS (5,85%) + CBS/IBS por fora (0,45%)</td>
+  <td>R$ {{ "%.2f"|format(resultado.hibrido_mensal) }}</td>
+  <td>R$ {{ "%.2f"|format(resultado.hibrido) }}</td>
+</tr>
+<tr>
+  <td colspan="2">— DAS (parte dentro do Híbrido)</td>
+  <td>R$ {{ "%.2f"|format(resultado.hibrido_das_mensal) }}</td>
+  <td>R$ {{ "%.2f"|format(resultado.hibrido_das) }}</td>
+</tr>
+<tr>
+  <td colspan="2">— CBS + IBS (parte "por fora" do Híbrido)</td>
+  <td>R$ {{ "%.2f"|format(resultado.hibrido_iva_mensal) }}</td>
+  <td>R$ {{ "%.2f"|format(resultado.hibrido_iva) }}</td>
+</tr>
 </table>
-<p>Melhor opção (ilustrativa): <strong>{{ "Simples Unificado" if resultado.melhor == "unificado" else "Híbrido" }}</strong> — diferença de R$ {{ "%.2f"|format(resultado.diferenca) }}.</p>
+<p>Opção com menor carga estimada: <strong>{{ "Simples Unificado" if resultado.melhor == "unificado" else "Híbrido" }}</strong>
+— diferença de R$ {{ "%.2f"|format(resultado.diferenca_mensal) }}/mês (R$ {{ "%.2f"|format(resultado.diferenca) }}/ano,
+{{ "%.1f"|format(resultado.diferenca_pct) }}% menor que a outra opção).</p>
+</div>
 {% endif %}
 """)
 

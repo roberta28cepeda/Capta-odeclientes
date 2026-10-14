@@ -143,6 +143,27 @@ def test_listar_leads_filters_by_tese_query_param(app, monkeypatch, campaigns_db
     assert b"Escrit\xc3\xb3rio Y" not in response.data
 
 
+def test_listar_leads_does_not_query_envios_per_lead(app, monkeypatch, campaigns_db_path):
+    """Regressão: com a lista de leads na casa dos milhares (importação da
+    PGFN), uma consulta de envios por lead (N+1) estourava o timeout de
+    300s do Vercel e a página ficava "carregando" pra sempre ao navegar
+    pro módulo de Captação. `envios_do_lead` busca um lead só por vez —
+    se a rota chamar essa função, está de volta ao padrão N+1.
+    """
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead1 = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    campaigns_storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y", email="y@exemplo.com")
+    campaigns_storage.create_envio(conn, lead1.id, "inicial", "token-abc")
+
+    with patch("src.campaigns.routes.storage.envios_do_lead", side_effect=AssertionError("N+1: não devia chamar por lead")):
+        response = app.test_client().get("/admin/campanhas/leads", headers=_basic_auth_header("admin", "senha-secreta"))
+
+    assert response.status_code == 200
+    assert b"Empresa X" in response.data
+    assert b"Empresa Y" in response.data
+
+
 def test_listar_templates_requires_admin(app):
     response = app.test_client().get("/admin/campanhas/templates")
     assert response.status_code == 401

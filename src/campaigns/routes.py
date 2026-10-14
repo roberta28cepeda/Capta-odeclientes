@@ -222,10 +222,14 @@ def listar_leads():
         return unauthorized
     conn = _connect()
     tese = request.args.get("tese") or None
-    leads = [
-        (lead, [envio.tipo for envio in storage.envios_do_lead(conn, lead.id)])
-        for lead in storage.list_leads(conn, tese=tese)
-    ]
+    leads_db = storage.list_leads(conn, tese=tese)
+    # Antes disso, cada lead disparava sua própria consulta de envios (N+1)
+    # — com a lista de leads já na casa dos milhares (importação da PGFN),
+    # essa página sozinha estourava o timeout de 300s do Vercel e ficava
+    # "carregando" pra sempre. `envios_por_lead_ids` busca tudo numa
+    # consulta só.
+    envios_por_lead = storage.envios_por_lead_ids(conn, [lead.id for lead in leads_db])
+    leads = [(lead, [envio.tipo for envio in envios_por_lead.get(lead.id, [])]) for lead in leads_db]
     return render_template_string(_LEADS_TEMPLATE, leads=leads, tese=tese, teses=_teses_conhecidas(conn))
 
 
