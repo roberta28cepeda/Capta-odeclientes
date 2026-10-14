@@ -647,3 +647,23 @@ def test_status_sistema_shows_integrations_and_data_state(app, monkeypatch, camp
     assert "✅ configurado".encode() in response.data
     assert "mei_regularizacao".encode() in response.data
     assert "texto real".encode() in response.data
+
+
+def test_status_sistema_links_to_rodar_campanha_agora(app, monkeypatch):
+    """"Rodar campanha agora" precisa estar na aba Admin, não na de
+    Captação — ver test_listar_leads_nao_oferece_rodar_campanha_agora."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/admin/status", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert response.status_code == 200
+    assert b"/admin/campanhas/rodar-agora" in response.data
+
+
+def test_listar_leads_nao_oferece_rodar_campanha_agora(app, monkeypatch, campaigns_db_path):
+    """A aba de Captação (lista de leads) é só consulta — o link que dispara
+    e-mail de verdade pros leads não pode estar aqui, só na aba Admin
+    (ver test_status_sistema_links_to_rodar_campanha_agora), pra não dar a
+    impressão de que só abrir a aba já inicia a campanha."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/admin/campanhas/leads", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert response.status_code == 200
+    assert b"/admin/campanhas/rodar-agora" not in response.data

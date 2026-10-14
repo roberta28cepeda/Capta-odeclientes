@@ -427,11 +427,16 @@ detalhe do CNPJ no dashboard (`/tenants/<id>/cnpjs/<id>`):
    simples, pensada pra priorizar qual cliente olhar primeiro — não é
    uma métrica oficial de nenhum órgão.
 4. **Simulador da Reforma Tributária** (`/reforma-tributaria`) — compara,
-   pra um faturamento anual informado, o regime "IVA unificado" (CBS+IBS)
-   com o "híbrido" (DAS + IVA sobre o excedente), mostrando qual dá menos
-   imposto. **As alíquotas usadas são ilustrativas** (a regulamentação
-   final ainda está em tramitação) — o simulador deixa esse aviso visível
-   na própria página, não deve ser usado como cálculo oficial.
+   pra um faturamento anual informado, o regime "Simples Unificado"
+   (CBS+IBS embutidos no DAS) com o "Híbrido" (DAS + CBS/IBS por fora),
+   mostrando qual dá menos imposto, com o detalhamento de cada componente
+   (mensal e anual). A parte de DAS do Híbrido usa a tabela **real** e
+   vigente do Simples Nacional (Anexo III, `reforma.ANEXO_III_FAIXAS`) —
+   não é placeholder. O resto (alíquota do Simples Unificado e CBS/IBS
+   "por fora" do Híbrido) **continua ilustrativo**, porque a
+   regulamentação final da reforma ainda está em tramitação — esse aviso
+   fica visível na própria página, não deve ser usado como cálculo
+   oficial.
 
 Esses 4 recursos foram portados do protótipo "Fiscalis" (enviado pelo
 usuário) pra dentro deste módulo, reaproveitando login, banco de dados e
@@ -680,6 +685,7 @@ diferentes (planilhas separadas), tratado como lead independente em cada.
 - `/admin/campanhas/leads/importar` — importa CSV pra uma tese (escolhida no formulário) direto pelo navegador.
 - `/admin/campanhas/templates?tese=<slug>` — edita cada campo do e-mail (tag, título, parágrafos, checklist, frase de urgência, texto/link do botão, nota de rodapé) daquela tese, pros 2 tipos (inicial + follow-up). Mesmo design visual da Leactis sempre no inicial; o follow-up sai como texto puro (só os campos de texto do template são usados, sem HTML).
 - `/admin/campanhas/whatsapp` — o "cartão" de contato: mostra um lead pendente de WhatsApp por vez (com telefone já achado), com o link `wa.me` pronto e um botão "marquei como contatado" — ver seção "WhatsApp" abaixo.
+- `/admin/campanhas/rodar-agora` — dispara manualmente o mesmo processo do cron diário (envio de e-mail de verdade pros leads pendentes). O link fica na aba **Admin** (`/admin/status`), não na aba Captação (`/admin/campanhas/leads`) — essa última é só consulta da carteira de leads, pra não dar a impressão de que abrir a aba já inicia a campanha.
 - `POST /cron/campanhas/rodar` — protegido por `CRON_SECRET` (mesma variável do cron do `fiscal_monitor`): busca e-mail pros leads que ainda não têm (se `EXA_API_KEY` configurada) e telefone via ReceitaWS (sempre, é gratuita); roda o envio do dia pra todo lead pendente, respeitando o limite de 10/dia por tese; manda o resumo de WhatsApp pra equipe (se `WHATSAPP_EQUIPE_EMAIL` configurada); e às segundas-feiras também dispara o relatório semanal (com detalhamento por tese) pro e-mail em `RELATORIO_SEMANAL_EMAIL`. **Não** está mais declarado em `vercel.json` (ver "Checagem automática agendada" acima) — chamado por um agendador externo (cron-job.org), várias vezes por dia (cada chamada processa só o que cabe no orçamento de tempo dela, o resto fica pendente pra próxima). O resumo de WhatsApp e o relatório semanal só saem **uma vez por dia** mesmo com várias chamadas (dedupe via `campanha_notificacoes_diarias`), e o resumo sempre lista a fila completa de pendentes (`leads_pendentes_whatsapp`) — não só quem foi enviado na chamada atual, já que telefone costuma ser achado numa chamada diferente da do e-mail.
 
 ### WhatsApp (nunca automático, por decisão de política)

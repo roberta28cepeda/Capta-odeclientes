@@ -333,8 +333,10 @@ e o <strong>IBS</strong> (Imposto sobre Bens e Serviços, estadual/municipal) �
   fora", separadamente, sobre o faturamento — útil principalmente pra quem vende pra
   outras empresas e quer gerar crédito de IVA pro cliente.</li>
 </ul>
-<p>Esse simulador estima os dois caminhos lado a lado, com a mesma lógica (percentual
-sobre o faturamento) usada no protótipo original.</p>
+<p>A parte de DAS do Híbrido usa a tabela <strong>real</strong> e progressiva do Simples
+Nacional (Anexo III, serviços em geral — LC 123/2006) — a alíquota efetiva sobe por faixa
+de faturamento, não é um percentual fixo. O resto (Simples Unificado e o CBS/IBS "por
+fora" do Híbrido) ainda é placeholder, porque a regulamentação final da reforma não saiu.</p>
 </div>
 
 <div class="alert">{{ resultado.aviso if resultado else "Valores ilustrativos (placeholders) — a regulamentação final da reforma ainda está em tramitação. Não use para cálculo real nem para orientar cliente sem validar com um contador." }}</div>
@@ -361,12 +363,12 @@ sobre o faturamento) usada no protótipo original.</p>
 </tr>
 <tr{% if resultado.melhor == "hibrido" %} style="background:#edf9f0"{% endif %}>
   <td><strong>Híbrido</strong></td>
-  <td>DAS (5,85%) + CBS/IBS por fora (0,45%)</td>
+  <td>DAS (Simples Nacional, Anexo III) + CBS/IBS por fora (0,45%)</td>
   <td>R$ {{ "%.2f"|format(resultado.hibrido_mensal) }}</td>
   <td>R$ {{ "%.2f"|format(resultado.hibrido) }}</td>
 </tr>
 <tr>
-  <td colspan="2">— DAS (parte dentro do Híbrido)</td>
+  <td colspan="2">— DAS (parte dentro do Híbrido — alíquota efetiva de {{ "%.2f"|format(resultado.hibrido_das_aliquota_pct) }}% pra esse faturamento)</td>
   <td>R$ {{ "%.2f"|format(resultado.hibrido_das_mensal) }}</td>
   <td>R$ {{ "%.2f"|format(resultado.hibrido_das) }}</td>
 </tr>
@@ -470,6 +472,11 @@ nenhum valor de senha/token, só se está presente ou não.</p>
 {% if dividas_abertas_count == 0 %}— nenhuma ainda, então a pré-análise não mostra data de
 inscrição nem ajuizamento/protesto pra nenhum CNPJ. <a href="/admin/pgfn-dados-abertos">Importar agora &rarr;</a>
 {% endif %}</p>
+
+<h2>Ações</h2>
+<p class="nav">
+  <a href="/admin/campanhas/rodar-agora">Rodar campanha agora (dispara e-mail de verdade pros leads pendentes)</a>
+</p>
 
 <h2>Leads de campanha por tese</h2>
 <table>

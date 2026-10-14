@@ -43,11 +43,12 @@ def _teses_conhecidas(conn) -> list[str]:
 
 _LEADS_TEMPLATE = page("Campanha — Leads", """
 <h1>Leads da campanha{% if tese %} — {{ tese }}{% endif %}</h1>
+<p class="lede">Consulta da carteira de leads — só visualização. Pra disparar e-mail de
+verdade pros leads, use "Rodar campanha agora" na aba Admin.</p>
 <p class="nav">
    <a href="/admin/campanhas/leads/importar">+ Importar leads (CSV)</a>
    <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a>
    <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a>
-   <a href="/admin/campanhas/rodar-agora">Rodar campanha agora</a>
    <a href="/admin/campanhas/leads/aparar">Podar lista de leads</a>
 </p>
 <div class="tabs">Teses:
