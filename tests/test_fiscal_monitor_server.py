@@ -259,6 +259,13 @@ def test_pre_analise_form_renders_on_get(app, monkeypatch):
     assert b"Pr\xc3\xa9-An\xc3\xa1lise Fiscal" in response.data
 
 
+def test_pre_analise_form_shows_manual_ade_link(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/pre-analise", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert response.status_code == 200
+    assert b"consultaEditais.aspx" in response.data
+
+
 def test_pre_analise_post_rejects_invalid_cnpj(app, monkeypatch):
     monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
     response = app.test_client().post(

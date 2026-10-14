@@ -277,6 +277,17 @@ def render_pre_analise_pdf(
         if situacao_divida_rj.total_divida:
             story.append(Paragraph(f"Total da dívida: R$ {formatar_valor_brl(situacao_divida_rj.total_divida)}", BODY_STYLE))
 
+    story.append(Paragraph("Consulta manual — Atos Declaratórios Executivos (Receita Federal)", HEADING_STYLE))
+    story.append(
+        Paragraph(
+            "A Receita Federal bloqueia consulta automática de Atos e Fatos Declaratórios Executivos (ADE) "
+            f"com captcha — não dá pra automatizar. CNPJ: {analise.cnpj}. "
+            '<a href="https://servicos.receita.fazenda.gov.br/servicos/editais/consultaEditais.aspx" color="blue">'
+            "Abrir consulta oficial</a>.",
+            BODY_STYLE,
+        )
+    )
+
     story.append(Paragraph("Alertas da pré-análise", ALERT_HEADING_STYLE))
     for alerta in alertas:
         story.append(Paragraph(f"• {alerta}", BULLET_STYLE))

@@ -469,6 +469,12 @@ _PRE_ANALISE_FORM_TEMPLATE = """
   <button type="submit">Baixar Cartão CNPJ</button>
 </form>
 {% endif %}
+<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #ccc">
+  <p><strong>Consulta manual — Atos Declaratórios Executivos (Receita Federal)</strong><br>
+  Bloqueada por captcha na origem, não dá pra automatizar — cole o CNPJ na página oficial.</p>
+  <p><a href="https://servicos.receita.fazenda.gov.br/servicos/editais/consultaEditais.aspx" target="_blank" rel="noopener">
+  Abrir consulta de Atos Declaratórios Executivos &rarr;</a></p>
+</div>
 <p style="margin-top:2rem;font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
 """
 
