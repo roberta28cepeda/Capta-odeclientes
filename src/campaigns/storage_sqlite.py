@@ -352,6 +352,65 @@ def envios_de_hoje_por_tese(conn: sqlite3.Connection, tese: str, desde_iso: str)
     return row["total"]
 
 
+def metricas_por_tese(conn: sqlite3.Connection, hoje_iso: str, semana_iso: str) -> dict[str, dict]:
+    """Painel da campanha — leads, envios e engajamento por tese, cada
+    número numa consulta agregada (GROUP BY) própria, nunca um loop por
+    lead/envio (mesmo problema de N+1 já corrigido na listagem de leads,
+    só que aqui pra métrica agregada em vez de linha por linha)."""
+    metricas: dict[str, dict] = {}
+
+    def _tese(tese: str) -> dict:
+        return metricas.setdefault(
+            tese,
+            {
+                "leads": 0, "com_email": 0, "com_telefone": 0,
+                "enviados_hoje": 0, "enviados_semana": 0,
+                "aberturas": 0, "cliques": 0,
+            },
+        )
+
+    for row in conn.execute(
+        """
+        SELECT tese, COUNT(*) AS leads,
+               SUM(CASE WHEN email IS NOT NULL AND email != '' THEN 1 ELSE 0 END) AS com_email,
+               SUM(CASE WHEN telefone IS NOT NULL AND telefone != '' THEN 1 ELSE 0 END) AS com_telefone
+        FROM campanha_leads WHERE status = 'ativo' GROUP BY tese
+        """
+    ).fetchall():
+        m = _tese(row["tese"])
+        m["leads"], m["com_email"], m["com_telefone"] = row["leads"], row["com_email"], row["com_telefone"]
+
+    for row in conn.execute(
+        """
+        SELECT l.tese AS tese,
+               SUM(CASE WHEN e.enviado_em >= ? THEN 1 ELSE 0 END) AS hoje,
+               SUM(CASE WHEN e.enviado_em >= ? THEN 1 ELSE 0 END) AS semana
+        FROM campanha_envios e JOIN campanha_leads l ON l.id = e.lead_id
+        GROUP BY l.tese
+        """,
+        (hoje_iso, semana_iso),
+    ).fetchall():
+        m = _tese(row["tese"])
+        m["enviados_hoje"], m["enviados_semana"] = row["hoje"], row["semana"]
+
+    for row in conn.execute(
+        """
+        SELECT l.tese AS tese, ev.tipo AS tipo, COUNT(DISTINCT ev.envio_id) AS total
+        FROM campanha_eventos ev
+        JOIN campanha_envios e ON e.id = ev.envio_id
+        JOIN campanha_leads l ON l.id = e.lead_id
+        GROUP BY l.tese, ev.tipo
+        """
+    ).fetchall():
+        m = _tese(row["tese"])
+        if row["tipo"] == "open":
+            m["aberturas"] = row["total"]
+        elif row["tipo"] == "click":
+            m["cliques"] = row["total"]
+
+    return metricas
+
+
 def _row_to_envio(row: sqlite3.Row) -> Envio:
     return Envio(
         id=row["id"], lead_id=row["lead_id"], tipo=row["tipo"], enviado_em=row["enviado_em"],

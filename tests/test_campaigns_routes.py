@@ -2,6 +2,7 @@ import base64
 import io
 import os
 import tempfile
+from datetime import date, datetime, time, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -649,21 +650,54 @@ def test_status_sistema_shows_integrations_and_data_state(app, monkeypatch, camp
     assert "texto real".encode() in response.data
 
 
+def test_listar_leads_shows_metricas_e_rodar_agora(app, monkeypatch, campaigns_db_path):
+    """A aba de Captação precisa ter tanto o link pra disparar a campanha
+    quanto um painel de métricas (enviados, aberturas, cliques) — não pode
+    ser só um botão de "rodar campanha" sem nenhuma visibilidade do que já
+    foi feito."""
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    envio = campaigns_storage.create_envio(conn, lead.id, "inicial", "token-abc")
+    campaigns_storage.add_evento(conn, envio.id, "open")
+    campaigns_storage.add_evento(conn, envio.id, "click")
+
+    response = app.test_client().get("/admin/campanhas/leads", headers=_basic_auth_header("admin", "senha-secreta"))
+
+    assert response.status_code == 200
+    assert b"/admin/campanhas/rodar-agora" in response.data
+    assert "Painel".encode() in response.data
+    assert b"Empresa X" in response.data
+
+
+def test_listar_leads_metricas_contam_enviados_aberturas_e_cliques(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead1 = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    lead2 = campaigns_storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y", email="y@exemplo.com")
+    envio1 = campaigns_storage.create_envio(conn, lead1.id, "inicial", "token-1")
+    campaigns_storage.create_envio(conn, lead2.id, "inicial", "token-2")
+    campaigns_storage.add_evento(conn, envio1.id, "open")
+
+    response = app.test_client().get("/admin/campanhas/leads", headers=_basic_auth_header("admin", "senha-secreta"))
+
+    assert response.status_code == 200
+    metricas = campaigns_storage.metricas_por_tese(
+        conn,
+        datetime.combine(date.today(), time.min, tzinfo=timezone.utc).isoformat(),
+        datetime.combine(date.today() - timedelta(days=7), time.min, tzinfo=timezone.utc).isoformat(),
+    )
+    assert metricas[TESE]["leads"] == 2
+    assert metricas[TESE]["enviados_semana"] == 2
+    assert metricas[TESE]["aberturas"] == 1
+    assert metricas[TESE]["cliques"] == 0
+
+
 def test_status_sistema_links_to_rodar_campanha_agora(app, monkeypatch):
-    """"Rodar campanha agora" precisa estar na aba Admin, não na de
-    Captação — ver test_listar_leads_nao_oferece_rodar_campanha_agora."""
+    """"Rodar campanha agora" também aparece na aba Admin (atalho rápido,
+    sem precisar entrar na Captação) — ver test_listar_leads_shows_metricas_e_rodar_agora
+    pra confirmar que a Captação continua tendo o link também."""
     monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
     response = app.test_client().get("/admin/status", headers=_basic_auth_header("admin", "senha-secreta"))
     assert response.status_code == 200
     assert b"/admin/campanhas/rodar-agora" in response.data
-
-
-def test_listar_leads_nao_oferece_rodar_campanha_agora(app, monkeypatch, campaigns_db_path):
-    """A aba de Captação (lista de leads) é só consulta — o link que dispara
-    e-mail de verdade pros leads não pode estar aqui, só na aba Admin
-    (ver test_status_sistema_links_to_rodar_campanha_agora), pra não dar a
-    impressão de que só abrir a aba já inicia a campanha."""
-    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
-    response = app.test_client().get("/admin/campanhas/leads", headers=_basic_auth_header("admin", "senha-secreta"))
-    assert response.status_code == 200
-    assert b"/admin/campanhas/rodar-agora" not in response.data

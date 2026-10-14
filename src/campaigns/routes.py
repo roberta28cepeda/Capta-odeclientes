@@ -13,7 +13,7 @@ from __future__ import annotations
 import csv
 import io
 import os
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from time import monotonic
 
 from flask import Blueprint, Response, current_app, jsonify, redirect, render_template_string, request
@@ -43,14 +43,37 @@ def _teses_conhecidas(conn) -> list[str]:
 
 _LEADS_TEMPLATE = page("Campanha — Leads", """
 <h1>Leads da campanha{% if tese %} — {{ tese }}{% endif %}</h1>
-<p class="lede">Consulta da carteira de leads — só visualização. Pra disparar e-mail de
-verdade pros leads, use "Rodar campanha agora" na aba Admin.</p>
 <p class="nav">
    <a href="/admin/campanhas/leads/importar">+ Importar leads (CSV)</a>
    <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a>
    <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a>
+   <a href="/admin/campanhas/rodar-agora">Rodar campanha agora</a>
    <a href="/admin/campanhas/leads/aparar">Podar lista de leads</a>
 </p>
+
+<div class="card">
+<h2 style="margin-top:0">Painel — o que já saiu</h2>
+<table>
+<tr><th>Tese</th><th>Leads</th><th>Com e-mail</th><th>Com telefone</th><th>Enviados hoje</th><th>Enviados (7 dias)</th><th>Aberturas</th><th>Cliques</th><th>Taxa de abertura</th></tr>
+{% for t, m in metricas.items() %}
+<tr>
+  <td>{{ t }}</td>
+  <td>{{ m.leads }}</td>
+  <td>{{ m.com_email }}</td>
+  <td>{{ m.com_telefone }}</td>
+  <td>{{ m.enviados_hoje }}</td>
+  <td>{{ m.enviados_semana }}</td>
+  <td>{{ m.aberturas }}</td>
+  <td>{{ m.cliques }}</td>
+  <td>{{ "%.0f"|format(m.aberturas / m.enviados_semana * 100) if m.enviados_semana else "-" }}{{ "%" if m.enviados_semana else "" }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if not metricas %}<p>Nenhum lead importado ainda.</p>{% endif %}
+<p><small>Aberturas/cliques contam envios únicos (não eventos repetidos) desde o início da
+campanha; enviados contam só o período indicado na coluna.</small></p>
+</div>
+
 <div class="tabs">Teses:
 {% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}"{% if t == tese %} class="ativa"{% endif %}>{{ t }}</a>{% endfor %}
 <a href="/admin/campanhas/leads">(todas)</a>
@@ -231,7 +254,10 @@ def listar_leads():
     # consulta só.
     envios_por_lead = storage.envios_por_lead_ids(conn, [lead.id for lead in leads_db])
     leads = [(lead, [envio.tipo for envio in envios_por_lead.get(lead.id, [])]) for lead in leads_db]
-    return render_template_string(_LEADS_TEMPLATE, leads=leads, tese=tese, teses=_teses_conhecidas(conn))
+    hoje_iso = datetime.combine(date.today(), time.min, tzinfo=timezone.utc).isoformat()
+    semana_iso = datetime.combine(date.today() - timedelta(days=7), time.min, tzinfo=timezone.utc).isoformat()
+    metricas = storage.metricas_por_tese(conn, hoje_iso, semana_iso)
+    return render_template_string(_LEADS_TEMPLATE, leads=leads, tese=tese, teses=_teses_conhecidas(conn), metricas=metricas)
 
 
 @bp.route("/admin/campanhas/leads/importar", methods=["GET", "POST"])
