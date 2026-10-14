@@ -63,6 +63,22 @@ def test_health_returns_ok(app):
     assert response.get_json() == {"status": "ok"}
 
 
+def test_home_redirects_to_tenants(app):
+    response = app.test_client().get("/", follow_redirects=False)
+    assert response.status_code in (301, 302)
+    assert response.headers["Location"].endswith("/tenants")
+
+
+def test_topbar_navigation_present_on_every_page(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().get("/pre-analise", headers=_basic_auth_header("admin", "senha-secreta"))
+    assert response.status_code == 200
+    assert b"topbar" in response.data
+    assert "Captação".encode() in response.data
+    assert b"Qualifica" in response.data
+    assert b"Carteira" in response.data
+
+
 def test_novo_tenant_requires_admin_auth(app):
     response = app.test_client().get("/admin/tenants/novo")
     assert response.status_code == 401

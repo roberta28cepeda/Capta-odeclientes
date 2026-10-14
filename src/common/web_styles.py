@@ -28,6 +28,22 @@ BASE_STYLE = """
     line-height: 1.5;
   }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  .topbar {
+    position: sticky; top: 0; z-index: 10; background: var(--card-bg);
+    border-bottom: 1px solid var(--border); box-shadow: 0 1px 3px rgba(15,23,42,.04);
+  }
+  .topbar-inner {
+    max-width: 1080px; margin: 0 auto; padding: .75rem 1.25rem;
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem;
+  }
+  .topbar-brand { font-weight: 800; font-size: 1.05rem; color: var(--accent-dark); letter-spacing: -.01em; }
+  .topbar-brand:hover { text-decoration: none; }
+  .topbar-links { display: flex; gap: .3rem; flex-wrap: wrap; list-style: none; margin: 0; padding: 0; }
+  .topbar-links a {
+    color: var(--text-muted); font-size: .88rem; font-weight: 600; padding: .4rem .7rem;
+    border-radius: 6px;
+  }
+  .topbar-links a:hover { background: var(--bg); color: var(--text); text-decoration: none; }
   h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
   h2 { font-size: 1.1rem; margin: 2rem 0 .75rem; color: var(--accent-dark); }
   a { color: var(--accent); text-decoration: none; }
@@ -41,7 +57,11 @@ BASE_STYLE = """
   .nav a:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
   .lede { color: var(--text-muted); margin: 0 0 1.5rem; max-width: 60ch; }
   .module-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-  .module-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem 1.5rem; }
+  .module-card {
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; padding: 1.25rem 1.5rem;
+    box-shadow: 0 1px 2px rgba(15,23,42,.04); transition: box-shadow .15s, border-color .15s;
+  }
+  .module-card:hover { box-shadow: 0 4px 12px rgba(15,23,42,.08); border-color: #cfd3da; }
   .module-card h2 { margin: 0 0 .4rem; font-size: 1rem; }
   .module-card .module-desc { color: var(--text-muted); font-size: .85rem; min-height: 2.6em; margin: 0 0 1rem; }
   .module-card .nav { margin: 0; }
@@ -51,8 +71,12 @@ BASE_STYLE = """
   .card {
     background: var(--card-bg); border: 1px solid var(--border);
     border-radius: 10px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;
+    box-shadow: 0 1px 2px rgba(15,23,42,.04);
   }
-  table { width: 100%; border-collapse: collapse; background: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; }
+  table {
+    width: 100%; border-collapse: collapse; background: var(--card-bg); border: 1px solid var(--border);
+    border-radius: 10px; overflow: hidden; box-shadow: 0 1px 2px rgba(15,23,42,.04);
+  }
   th, td { text-align: left; padding: .6rem .9rem; border-bottom: 1px solid var(--border); font-size: .92rem; }
   th { background: #fafbfc; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: .72rem; letter-spacing: .03em; }
   tr:last-child td { border-bottom: none; }
@@ -86,11 +110,29 @@ BASE_STYLE = """
 """
 
 
+_TOPBAR = """
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="topbar-brand" href="/tenants">Capta</a>
+    <nav class="topbar-links">
+      <a href="/admin/campanhas/leads">Captação</a>
+      <a href="/pre-analise">Qualificação</a>
+      <a href="/tenants">Carteira</a>
+      <a href="/admin/status">Admin</a>
+    </nav>
+  </div>
+</header>
+"""
+
+
 def page(title: str, body: str) -> str:
-    """Envelope HTML comum (doctype/head/estilo/wrap) pra um corpo de
-    template Jinja já pronto. `title` pode conter sintaxe Jinja (ex:
-    `"{{ tenant.nome }}"`) — o resultado inteiro ainda passa por
-    `render_template_string` depois.
+    """Envelope HTML comum (doctype/head/barra de navegação fixa/wrap) pra
+    um corpo de template Jinja já pronto. A barra de navegação fica sempre
+    visível em toda página, com acesso direto aos 3 módulos — sem isso,
+    cada página só tinha um link de "voltar" isolado, e visitar o domínio
+    sem nenhum caminho dava 404 (sem ponto de entrada nenhum). `title` pode
+    conter sintaxe Jinja (ex: `"{{ tenant.nome }}"`) — o resultado inteiro
+    ainda passa por `render_template_string` depois.
     """
     return f"""<!doctype html>
 <html lang="pt-br">
@@ -101,6 +143,7 @@ def page(title: str, body: str) -> str:
 {BASE_STYLE}
 </head>
 <body>
+{_TOPBAR}
 <div class="wrap">
 {body}
 </div>

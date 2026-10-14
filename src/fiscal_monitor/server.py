@@ -383,24 +383,22 @@ _USUARIOS_TEMPLATE = page("Usuários da equipe", """
 {% if not usuarios %}<p>Nenhum acesso individual cadastrado ainda — só o usuário mestre (ADMIN_USERNAME).</p>{% endif %}
 """)
 
-_PGFN_DADOS_ABERTOS_TEMPLATE = """
-<!doctype html>
-<title>Dados Abertos da PGFN</title>
-<h1>Dados Abertos da PGFN</h1>
+_PGFN_DADOS_ABERTOS_TEMPLATE = page("Dados Abertos da PGFN", """
 <p><a href="/tenants">&larr; voltar</a></p>
-<p>Importa o arquivo trimestral de Dados Abertos da dívida ativa (baixado em
+<h1>Dados Abertos da PGFN</h1>
+<p class="lede">Importa o arquivo trimestral de Dados Abertos da dívida ativa (baixado em
 gov.br/pgfn &rarr; Acesso à Informação &rarr; Dados Abertos — <strong>não</strong>
 confundir com a "Lista de Devedores"). Isso completa a pré-análise com data
 de inscrição e se a dívida já foi ajuizada ou protestada, pra cada
 inscrição que também aparecer numa consulta futura.</p>
-{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
-{% if sucesso %}<p style="color:#1a7a3c"><strong>{{ sucesso }}</strong></p>{% endif %}
-<form method="post" enctype="multipart/form-data">
-  <p><label>Referência (ex: 2026-03)<br><input type="text" name="base_referencia" required placeholder="AAAA-MM" value="{{ base_referencia or '' }}"></label></p>
-  <p><label>Arquivo (.xlsx ou .csv)<br><input type="file" name="arquivo" accept=".xlsx,.csv" required></label></p>
+{% if erro %}<div class="alert">{{ erro }}</div>{% endif %}
+{% if sucesso %}<div class="success">{{ sucesso }}</div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="card">
+  <label>Referência (ex: 2026-03)<input type="text" name="base_referencia" required placeholder="AAAA-MM" value="{{ base_referencia or '' }}"></label>
+  <label>Arquivo (.xlsx ou .csv)<input type="file" name="arquivo" accept=".xlsx,.csv" required></label>
   <button type="submit">Importar</button>
 </form>
-"""
+""")
 
 _STATUS_TEMPLATE = page("Status do sistema", """
 <p><a href="/tenants">&larr; voltar</a></p>
@@ -440,50 +438,47 @@ inscrição nem ajuizamento/protesto pra nenhum CNPJ. <a href="/admin/pgfn-dados
 </table>
 """)
 
-_TENANT_CRIADO_TEMPLATE = """
-<!doctype html>
-<title>Escritório cadastrado</title>
+_TENANT_CRIADO_TEMPLATE = page("Escritório cadastrado", """
 <h1>Escritório cadastrado: {{ tenant.nome }}</h1>
+<div class="card">
 <p>Link de acesso pra esse escritório (guarde/envie com cuidado — dá acesso à carteira dele):</p>
 <p><code>{{ link }}</code></p>
 {% if resultado_carteira %}<p>Carteira: {{ resultado_carteira }}</p>{% endif %}
-<p><a href="/tenants">&larr; voltar pra lista</a> · <a href="{{ link }}">ver a carteira deste escritório</a></p>
-"""
+</div>
+<p class="nav"><a href="/tenants">&larr; voltar pra lista</a><a href="{{ link }}">ver a carteira deste escritório</a></p>
+""")
 
-_PRE_ANALISE_FORM_TEMPLATE = """
-<!doctype html>
-<title>Pré-Análise Fiscal</title>
+_PRE_ANALISE_FORM_TEMPLATE = page("Pré-Análise Fiscal", """
 <h1>Pré-Análise Fiscal</h1>
-<p>Só o CNPJ — sem procuração, sem acesso ao e-CAC. Gera um PDF pra levar na reunião.</p>
-{% if erro %}<p style="color:#B23A48"><strong>{{ erro }}</strong></p>{% endif %}
-<form method="post" enctype="multipart/form-data">
-  <p><label>CNPJ<br><input type="text" name="cnpj" required placeholder="00.000.000/0000-00" value="{{ cnpj or '' }}"></label></p>
-  <p><label>Nome do escritório (opcional)<br><input type="text" name="escritorio_nome" value="{{ escritorio_nome or '' }}"></label></p>
-  <p><label>Logo (opcional)<br><input type="file" name="logo" accept="image/*"></label></p>
+<p class="lede">Só o CNPJ — sem procuração, sem acesso ao e-CAC. Gera um PDF pra levar na reunião.</p>
+{% if erro %}<div class="alert">{{ erro }}</div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="card">
+  <label>CNPJ<input type="text" name="cnpj" required placeholder="00.000.000/0000-00" value="{{ cnpj or '' }}"></label>
+  <label>Nome do escritório (opcional)<input type="text" name="escritorio_nome" value="{{ escritorio_nome or '' }}"></label>
+  <label>Logo (opcional)<input type="file" name="logo" accept="image/*"></label>
   <button type="submit">Gerar pré-análise (PDF)</button>
 </form>
 {% if cnpja_disponivel %}
-<form method="get" action="/pre-analise/cartao-cnpj" style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #ccc">
-  <p><label>Baixar Cartão CNPJ oficial (PDF direto da Receita Federal, via CNPJá)<br>
-     <input type="text" name="cnpj" required placeholder="00.000.000/0000-00"></label></p>
+<form method="get" action="/pre-analise/cartao-cnpj" class="card">
+  <label>Baixar Cartão CNPJ oficial (PDF direto da Receita Federal, via CNPJá)
+     <input type="text" name="cnpj" required placeholder="00.000.000/0000-00"></label>
   <button type="submit">Baixar Cartão CNPJ</button>
 </form>
 {% endif %}
-<div style="margin-top:1.5rem;padding-top:1rem;border-top:1px solid #ccc">
+<div class="card">
   <p><strong>Consulta manual — Atos Declaratórios Executivos (Receita Federal)</strong><br>
   Bloqueada por captcha na origem, não dá pra automatizar — cole o CNPJ na página oficial.</p>
   <p><a href="https://servicos.receita.fazenda.gov.br/servicos/editais/consultaEditais.aspx" target="_blank" rel="noopener">
   Abrir consulta de Atos Declaratórios Executivos &rarr;</a></p>
 </div>
-<p style="margin-top:2rem;font-size:0.9em"><a href="/privacidade">Política de Privacidade e LGPD</a></p>
-"""
+<p><small><a href="/privacidade">Política de Privacidade e LGPD</a></small></p>
+""")
 
-_PRIVACIDADE_TEMPLATE = """
-<!doctype html>
-<title>Política de Privacidade</title>
+_PRIVACIDADE_TEMPLATE = page("Política de Privacidade", """
 <h1>Política de Privacidade e Proteção de Dados (LGPD)</h1>
-<p><em>Última atualização: {{ hoje }}</em></p>
+<p class="lede"><em>Última atualização: {{ hoje }}</em></p>
 
+<div class="card">
 <h2>1. Quem é o responsável pelos dados</h2>
 <p>
   <strong>LEAO CONSULTORIA ESTRATEGICA LTDA</strong> (Leactis),
@@ -537,7 +532,8 @@ portabilidade, ou informação sobre com quem compartilhamos seus dados.</p>
 <h2>7. Contato</h2>
 <p>Para exercer esses direitos ou tirar dúvidas sobre este tratamento de
 dados, escreva para <a href="mailto:contato@leactis.com.br">contato@leactis.com.br</a>.</p>
-"""
+</div>
+""")
 
 
 def _tenant_authorized(tenant: storage.Tenant) -> bool:
@@ -561,6 +557,13 @@ def create_app(
 
     def _connect() -> sqlite3.Connection:
         return storage.connect(db_path)
+
+    @app.get("/")
+    def home():
+        """Sem isso, visitar o domínio sem nenhum caminho (ex: fiscal.leactis.com.br)
+        dava 404 — ponto de entrada confuso pra quem não sabe a URL exata de cada
+        módulo. Redireciona pra página inicial de verdade."""
+        return redirect("/tenants")
 
     @app.get("/health")
     def health():

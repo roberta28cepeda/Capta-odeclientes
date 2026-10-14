@@ -41,20 +41,20 @@ def _teses_conhecidas(conn) -> list[str]:
     return sorted(set(DEFAULT_TEMPLATES.keys()) | set(storage.list_teses(conn)) | set(storage.list_template_teses(conn)))
 
 
-_LEADS_TEMPLATE = """
-<!doctype html>
-<title>Campanha — Leads</title>
+_LEADS_TEMPLATE = page("Campanha — Leads", """
 <h1>Leads da campanha{% if tese %} — {{ tese }}{% endif %}</h1>
-<p><a href="/admin/campanhas/leads/importar">+ Importar leads (CSV)</a> ·
-   <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a> ·
-   <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a> ·
-   <a href="/admin/campanhas/rodar-agora">Rodar campanha agora</a> ·
-   <a href="/admin/campanhas/leads/aparar">Podar lista de leads</a></p>
-<p>Teses:
-{% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}" style="margin-right:10px;{% if t == tese %}font-weight:bold;{% endif %}">{{ t }}</a>{% endfor %}
-<a href="/admin/campanhas/leads">(todas)</a>
+<p class="nav">
+   <a href="/admin/campanhas/leads/importar">+ Importar leads (CSV)</a>
+   <a href="/admin/campanhas/templates{% if tese %}?tese={{ tese }}{% endif %}">Editar templates de e-mail</a>
+   <a href="/admin/campanhas/whatsapp">Cartão de contato via WhatsApp</a>
+   <a href="/admin/campanhas/rodar-agora">Rodar campanha agora</a>
+   <a href="/admin/campanhas/leads/aparar">Podar lista de leads</a>
 </p>
-<table border="1" cellpadding="6" cellspacing="0">
+<div class="tabs">Teses:
+{% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}"{% if t == tese %} class="ativa"{% endif %}>{{ t }}</a>{% endfor %}
+<a href="/admin/campanhas/leads">(todas)</a>
+</div>
+<table>
 <tr><th>CNPJ</th><th>Tese</th><th>Razão social</th><th>Valor dívida</th><th>E-mail</th><th>Status</th><th>Envios</th></tr>
 {% for lead, envios in leads %}
 <tr>
@@ -68,24 +68,22 @@ _LEADS_TEMPLATE = """
 </tr>
 {% endfor %}
 </table>
-"""
+""")
 
-_IMPORTAR_LEADS_TEMPLATE = """
-<!doctype html>
-<title>Importar leads</title>
-<h1>Importar leads da campanha</h1>
+_IMPORTAR_LEADS_TEMPLATE = page("Importar leads", """
 <p><a href="/admin/campanhas/leads">&larr; voltar</a></p>
-{% if resultado %}<p>{{ resultado }}</p>{% endif %}
-<form method="post" enctype="multipart/form-data">
-  <p><label>Tese (planilha)<br>
+<h1>Importar leads da campanha</h1>
+{% if resultado %}<div class="success">{{ resultado }}</div>{% endif %}
+<form method="post" enctype="multipart/form-data" class="card">
+  <label>Tese (planilha)
      <input type="text" name="tese" list="teses-conhecidas" required placeholder="ex: transportadoras_pgfn">
      <datalist id="teses-conhecidas">{% for t in teses %}<option value="{{ t }}">{% endfor %}</datalist>
-  </label></p>
-  <p><label>CSV (colunas: cnpj,razao_social,email,valor_divida — email e valor_divida são opcionais)<br>
-     <input type="file" name="csv" accept=".csv" required></label></p>
+  </label>
+  <label>CSV (colunas: cnpj,razao_social,email,valor_divida — email e valor_divida são opcionais)
+     <input type="file" name="csv" accept=".csv" required></label>
   <button type="submit">Importar</button>
 </form>
-"""
+""")
 
 _APARAR_LEADS_TEMPLATE = page("Podar lista de leads", """
 <p><a href="/admin/campanhas/leads">&larr; voltar</a></p>
@@ -106,46 +104,43 @@ e-mail/telefone e envio diário.</p>
 </form>
 """)
 
-_TEMPLATES_TEMPLATE = """
-<!doctype html>
-<title>Templates da campanha</title>
-<h1>Templates de e-mail — {{ tese }}</h1>
+_TEMPLATES_TEMPLATE = page("Templates da campanha", """
 <p><a href="/admin/campanhas/leads?tese={{ tese }}">&larr; voltar pros leads dessa tese</a></p>
-<p>Teses:
-{% for t in teses %}<a href="/admin/campanhas/templates?tese={{ t }}" style="margin-right:10px;{% if t == tese %}font-weight:bold;{% endif %}">{{ t }}</a>{% endfor %}
-</p>
-<p>Placeholders disponíveis em assunto/título/parágrafos/frase de urgência: <code>{{ '{{RAZAO_SOCIAL}}' }}</code>, <code>{{ '{{CNPJ}}' }}</code>, <code>{{ '{{VALOR_DIVIDA}}' }}</code></p>
+<h1>Templates de e-mail — {{ tese }}</h1>
+<div class="tabs">Teses:
+{% for t in teses %}<a href="/admin/campanhas/templates?tese={{ t }}"{% if t == tese %} class="ativa"{% endif %}>{{ t }}</a>{% endfor %}
+</div>
+<p><small>Placeholders disponíveis em assunto/título/parágrafos/frase de urgência: <code>{{ '{{RAZAO_SOCIAL}}' }}</code>, <code>{{ '{{CNPJ}}' }}</code>, <code>{{ '{{VALOR_DIVIDA}}' }}</code></small></p>
 {% for template in templates %}
-<hr>
-<h2>{{ template.tipo }}</h2>
+<div class="card">
+<h2 style="margin-top:0">{{ template.tipo }}</h2>
 <form method="post" action="/admin/campanhas/templates/{{ tese }}/{{ template.tipo }}">
-  <p><label>Assunto<br><input type="text" name="assunto" style="width:100%" value="{{ template.assunto }}"></label></p>
-  <p><label>Tag (selo no topo do e-mail)<br><input type="text" name="tag" style="width:100%" value="{{ template.tag }}"></label></p>
-  <p><label>Título<br><textarea name="headline" rows="2" style="width:100%">{{ template.headline }}</textarea></label></p>
-  <p><label>Parágrafo 1<br><textarea name="paragrafo1" rows="3" style="width:100%">{{ template.paragrafo1 }}</textarea></label></p>
-  <p><label>Parágrafo 2<br><textarea name="paragrafo2" rows="3" style="width:100%">{{ template.paragrafo2 }}</textarea></label></p>
-  <p><label>Checklist (um item por linha)<br><textarea name="checklist" rows="4" style="width:100%">{{ template.checklist|join("\n") }}</textarea></label></p>
-  <p><label>Frase de urgência (itálico)<br><textarea name="italico" rows="2" style="width:100%">{{ template.italico }}</textarea></label></p>
-  <p><label>Texto do botão (CTA)<br><input type="text" name="cta_texto" style="width:100%" value="{{ template.cta_texto }}"></label></p>
-  <p><label>Link de destino do CTA<br><input type="text" name="link_cta" style="width:100%" value="{{ template.link_cta }}"></label></p>
-  <p><label>Nota de rodapé (itálico, cinza)<br><textarea name="rodape_nota" rows="2" style="width:100%">{{ template.rodape_nota }}</textarea></label></p>
+  <label>Assunto<input type="text" name="assunto" style="max-width:100%" value="{{ template.assunto }}"></label>
+  <label>Tag (selo no topo do e-mail)<input type="text" name="tag" style="max-width:100%" value="{{ template.tag }}"></label>
+  <label>Título<textarea name="headline" rows="2" style="max-width:100%">{{ template.headline }}</textarea></label>
+  <label>Parágrafo 1<textarea name="paragrafo1" rows="3" style="max-width:100%">{{ template.paragrafo1 }}</textarea></label>
+  <label>Parágrafo 2<textarea name="paragrafo2" rows="3" style="max-width:100%">{{ template.paragrafo2 }}</textarea></label>
+  <label>Checklist (um item por linha)<textarea name="checklist" rows="4" style="max-width:100%">{{ template.checklist|join("\n") }}</textarea></label>
+  <label>Frase de urgência (itálico)<textarea name="italico" rows="2" style="max-width:100%">{{ template.italico }}</textarea></label>
+  <label>Texto do botão (CTA)<input type="text" name="cta_texto" style="max-width:100%" value="{{ template.cta_texto }}"></label>
+  <label>Link de destino do CTA<input type="text" name="link_cta" style="max-width:100%" value="{{ template.link_cta }}"></label>
+  <label>Nota de rodapé (itálico, cinza)<textarea name="rodape_nota" rows="2" style="max-width:100%">{{ template.rodape_nota }}</textarea></label>
   <button type="submit">Salvar {{ template.tipo }}</button>
 </form>
+</div>
 {% endfor %}
-"""
+""")
 
 
-_WHATSAPP_CARTAO_TEMPLATE = """
-<!doctype html>
-<title>Cartão WhatsApp — Campanha</title>
-<h1>Cartão de contato via WhatsApp</h1>
+_WHATSAPP_CARTAO_TEMPLATE = page("Cartão WhatsApp — Campanha", """
 <p><a href="/admin/campanhas/leads">&larr; voltar pros leads</a></p>
-<p>Mostra um lead pendente de cada vez — assim que alguém marca como
+<h1>Cartão de contato via WhatsApp</h1>
+<p class="lede">Mostra um lead pendente de cada vez — assim que alguém marca como
 contatado, ele some da fila pra quem mais abrir essa página (evita
 contato duplicado quando várias pessoas usam o mesmo número).</p>
 {% if lead %}
-<div style="border:1px solid #ccc;padding:1.5rem;max-width:420px;border-radius:8px">
-  <h2>{{ lead.razao_social or lead.cnpj }}</h2>
+<div class="card" style="max-width:420px">
+  <h2 style="margin-top:0">{{ lead.razao_social or lead.cnpj }}</h2>
   <p>CNPJ: {{ lead.cnpj }} — Tese: {{ lead.tese }}</p>
   {% if lead.valor_divida %}<p>Dívida: R$ {{ "%.2f"|format(lead.valor_divida) }}</p>{% endif %}
   <p><a href="{{ link_whatsapp }}" target="_blank" rel="noopener">Abrir WhatsApp com mensagem pronta &rarr;</a></p>
@@ -157,7 +152,7 @@ contato duplicado quando várias pessoas usam o mesmo número).</p>
 {% else %}
 <p>Nenhum lead pendente de contato via WhatsApp no momento (sem telefone achado ainda, ou todo mundo já foi contatado).</p>
 {% endif %}
-"""
+""")
 
 _RODAR_AGORA_TEMPLATE = page("Rodar campanha agora", """
 <p><a href="/admin/campanhas/leads">&larr; voltar pros leads</a></p>
