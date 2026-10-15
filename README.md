@@ -751,6 +751,78 @@ normal, só sem sincronizar com o Brevo.
   assim.
 - **Tese de regularização de MEI ainda não tem texto real** — só rascunho, aguardando o ângulo/pitch da tese.
 
+## Fechando os gaps com a visão "LEACTIS 360"
+
+A partir de uma comparação entre sistemas de mercado (Makro, IOB, ASIS,
+VERI) e uma proposta de arquitetura própria ("LEACTIS 360": um hub
+central que integra motores especializados), mapeamos o que o Capta já
+cobre e o que falta. Shippamos os 6 itens mais fundamentais e de menor
+risco — os que não dependem de decisão de fornecedor nem de inventar
+lógica tributária sem base real:
+
+1. **Funil de captação completo** (`src/campaigns`) — o lead passa por
+   `novo → qualificado → proposta_enviada → fechado/perdido` dentro do
+   mesmo sistema que já envia e-mail/WhatsApp (`/admin/campanhas/leads`,
+   filtro por estágio). Quando marcado `fechado`, um botão "Converter em
+   cliente" cria automaticamente o tenant e o CNPJ na Carteira
+   (`fiscal_monitor`) — hoje isso era 100% manual, reimportando o dado à
+   mão. **Diferencial:** nenhum dos 4 sistemas comparados cobre
+   captação+conversão — cada um assume que o cliente já chegou. **Venda:**
+   "do primeiro e-mail ao cliente ativo, sem reimportar dado em nenhum
+   outro sistema".
+
+2. **Documentos** (`/tenants/<id>/cnpjs/<id>/documentos`) — repositório
+   genérico por CNPJ (contrato, procuração, XML, outros), mesmo padrão de
+   armazenamento das certidões (conteúdo em `BYTEA`/`BLOB` no banco, sem
+   depender de disco). **Atende:** onboarding sem checklist de documento
+   hoje é 100% manual/fora do sistema. **Venda:** "toda documentação do
+   cliente num lugar só, sem pasta de e-mail".
+
+3. **Oportunidades de crédito** (`/tenants/<id>/cnpjs/<id>/oportunidades`)
+   — registro manual e estruturado por CNPJ (tipo: Simples
+   monofásico/DAS, PIS/Cofins não cumulativos, ICMS/ST, IRPJ/CSLL
+   retidos, Previdenciário/ISS/IPI; status: identificada → em_análise →
+   validada → protocolada → recebida), aparece também no dossiê fiscal em
+   PDF. **Importante:** isso **não é** um motor automático de detecção de
+   crédito (o Capta não analisa nada sozinho) — é onde o escritório
+   registra e acompanha o que já identificou manualmente. **Diferencial:**
+   não substitui um motor de verdade (tipo ASIS), mas nenhum dos 4
+   sistemas comparados tem onde **mostrar e acompanhar** oportunidades já
+   identificadas com o cliente. **Venda:** "mostre ao cliente, com
+   histórico e evidência, cada real que você já identificou pra ele
+   recuperar".
+
+4. **Faturamento de honorários** (`/tenants/<id>/financeiro`) — registro
+   de competência/valor/status (pendente/pago/atrasado) por tenant, com
+   agregado de pendentes/atrasados em `/admin/status`. Sem gateway de
+   pagamento ainda — é só controle de cobrança. **Atende:** hoje não há
+   nenhum controle de cobrança dentro do Capta. **Venda:** "veja a
+   inadimplência da carteira inteira numa tela".
+
+5. **Portal do cliente mais rico** (`/tenants/<id>?token=...`) — a página
+   que o cliente já acessa pelo link dele ganhou 3 seções novas:
+   documentos, oportunidades de crédito e honorários — antes só mostrava
+   obrigações/certidões/alertas. **Venda:** "seu cliente vê status de
+   tudo sozinho, 24/7, sem precisar pedir nada por WhatsApp".
+
+6. **Trilha de auditoria** (`/admin/auditoria`) — tabela
+   `auditoria_eventos` (quem, ação, entidade, quando) persistida no banco,
+   registrada nos pontos de escrita criados nesta fase (documento
+   enviado, oportunidade registrada/alterada, honorário lançado/alterado,
+   lead convertido em cliente) — não cobre retroativamente o que já
+   existia antes. **Atende:** rastreabilidade pra decisão de crédito,
+   LGPD, e debug real de produção (antes era só `print()` em log efêmero
+   do Vercel). **Diferencial:** nenhum dos 4 sistemas comparados
+   documenta isso como diferencial pro escritório ver. **Venda:** "toda
+   ação fica registrada — segurança que você pode mostrar pro cliente".
+
+**Deliberadamente fora desta fase:** RBAC granular, MFA, assinatura
+eletrônica de documento e gateway de pagamento de honorário. Cada um
+depende de decisão de fornecedor que a usuária precisa tomar antes (ex:
+Clicksign/Autentique pra assinatura, Asaas/Stripe pra pagamento, `pyotp`
+pra MFA) ou de escopo jurídico — mesmo cuidado que o projeto já teve com
+e-CAC/certificado digital (ver "O que este MVP não faz (ainda)" acima).
+
 ## Roadmap (por viabilidade)
 
 | Módulo | Viabilidade | Status |
@@ -765,3 +837,5 @@ normal, só sem sincronizar com o Brevo.
 | Monitoramento Fiscal (estilo Veri) — via CSV, com CND/parcelamento/sublimite Simples | Médio | ✅ MVP implementado |
 | Monitoramento Fiscal — integração real via Serpro Integra Contador (canal oficial Receita Federal) | Difícil (contrato Serpro + certificado digital) | ⏳ Terreno preparado (`SerproIntegraContadorProvider`), não ativado — ver seção acima |
 | Campanha de prospecção PGFN — envio + follow-up + rastreio + relatório semanal | Médio (depende da Exa Search API pra achar e-mail) | ✅ MVP implementado — textos de e-mail ainda são rascunho, ver seção acima |
+| Gaps "LEACTIS 360" — funil de captação, documentos, oportunidades de crédito, faturamento, portal do cliente, trilha de auditoria | Fácil/Médio | ✅ Fase 1 implementada — ver seção acima |
+| Gaps "LEACTIS 360" — RBAC granular, MFA, assinatura eletrônica, gateway de pagamento | Difícil (depende de decisão de fornecedor/escopo jurídico) | ⏳ Fora desta fase por decisão, ver seção acima |

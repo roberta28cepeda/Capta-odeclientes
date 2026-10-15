@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS campanha_leads (
     valor_divida REAL,
     telefone TEXT,
     whatsapp_contatado_em TEXT,
+    estagio TEXT NOT NULL DEFAULT 'novo',
     UNIQUE(cnpj, tese)
 );
 
@@ -275,7 +276,13 @@ def _row_to_lead(row: sqlite3.Row) -> Lead:
         id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],
         status=row["status"], criado_em=row["criado_em"], valor_divida=row["valor_divida"],
         telefone=row["telefone"], whatsapp_contatado_em=row["whatsapp_contatado_em"],
+        estagio=row["estagio"] if "estagio" in row.keys() else "novo",
     )
+
+
+def set_lead_estagio(conn: sqlite3.Connection, lead_id: int, estagio: str) -> None:
+    conn.execute("UPDATE campanha_leads SET estagio = ? WHERE id = ?", (estagio, lead_id))
+    conn.commit()
 
 
 def create_envio(conn: sqlite3.Connection, lead_id: int, tipo: str, tracking_token: str | None = None) -> Envio:

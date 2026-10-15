@@ -93,3 +93,85 @@ class AdminUser:
     nome: str | None
     criado_em: str
     ativo: bool = True
+
+
+TIPOS_DOCUMENTO = {"contrato", "procuracao", "xml", "outro"}
+
+
+@dataclass
+class Documento:
+    """Repositório documental genérico por CNPJ (contrato, procuração, XML,
+    outros) — mesmo padrão de `Certidao` (metadado separado do conteúdo,
+    que fica em `arquivo_conteudo`/BYTEA, pra não carregar o arquivo
+    inteiro toda vez que só a lista é exibida).
+    """
+
+    id: int
+    cnpj_id: int
+    tipo: str
+    nome_arquivo: str
+    criado_em: str
+
+
+TIPOS_OPORTUNIDADE_CREDITO = {
+    "simples_monofasico_das",
+    "pis_cofins_nao_cumulativos",
+    "icms_st",
+    "irpj_csll_retidos",
+    "previdenciario_iss_ipi",
+}
+STATUS_OPORTUNIDADE_CREDITO = ["identificada", "em_analise", "validada", "protocolada", "recebida"]
+
+
+@dataclass
+class OportunidadeCredito:
+    """Registro MANUAL de uma oportunidade de crédito tributário
+    identificada por fora do sistema (ex: pelo contador, analisando XML/
+    EFD) — não é detecção automática, o Capta não tem motor de auditoria
+    tributária. Só dá um lugar estruturado pra guardar e acompanhar o que
+    já foi achado, com evidência e status, por CNPJ.
+    """
+
+    id: int
+    cnpj_id: int
+    tipo: str
+    descricao: str
+    valor_estimado: float | None
+    status: str
+    evidencia: str | None
+    criado_em: str
+
+
+STATUS_HONORARIO = ["pendente", "pago", "atrasado"]
+
+
+@dataclass
+class Honorario:
+    """Cobrança de honorário mensal de um tenant — registro de controle
+    (competência/valor/status), sem gateway de pagamento integrado ainda.
+    """
+
+    id: int
+    tenant_id: int
+    competencia: str  # "AAAA-MM"
+    valor: float
+    status: str
+    vencimento: str
+    criado_em: str
+
+
+@dataclass
+class AuditoriaEvento:
+    """Linha da trilha de auditoria — quem fez o quê, quando, em qual
+    entidade. Cobre só as ações novas desta fase (conversão de lead em
+    cliente, oportunidade de crédito, honorário, documento); não tenta
+    cobrir retroativamente o sistema inteiro.
+    """
+
+    id: int
+    quem: str
+    acao: str
+    entidade: str
+    entidade_id: int | None
+    detalhes: str | None
+    criado_em: str

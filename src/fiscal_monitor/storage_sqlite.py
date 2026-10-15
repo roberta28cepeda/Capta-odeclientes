@@ -10,7 +10,18 @@ import secrets
 import sqlite3
 from datetime import datetime, timezone
 
-from src.fiscal_monitor.models import AdminUser, Certidao, Cnpj, Finding, Obrigacao, Tenant
+from src.fiscal_monitor.models import (
+    AdminUser,
+    AuditoriaEvento,
+    Certidao,
+    Cnpj,
+    Documento,
+    Finding,
+    Honorario,
+    Obrigacao,
+    OportunidadeCredito,
+    Tenant,
+)
 
 DEFAULT_DB_PATH = "output/fiscal_monitor.db"
 
@@ -105,6 +116,46 @@ CREATE TABLE IF NOT EXISTS pgfn_dividas_abertas (
     importado_em TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS pgfn_dividas_abertas_cnpj_idx ON pgfn_dividas_abertas(cnpj);
+
+CREATE TABLE IF NOT EXISTS documentos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    tipo TEXT NOT NULL,
+    nome_arquivo TEXT NOT NULL,
+    arquivo_conteudo BLOB NOT NULL,
+    criado_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oportunidades_credito (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    tipo TEXT NOT NULL,
+    descricao TEXT NOT NULL,
+    valor_estimado REAL,
+    status TEXT NOT NULL DEFAULT 'identificada',
+    evidencia TEXT,
+    criado_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS honorarios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+    competencia TEXT NOT NULL,
+    valor REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pendente',
+    vencimento TEXT NOT NULL,
+    criado_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auditoria_eventos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    quem TEXT NOT NULL,
+    acao TEXT NOT NULL,
+    entidade TEXT NOT NULL,
+    entidade_id INTEGER,
+    detalhes TEXT,
+    criado_em TEXT NOT NULL
+);
 """
 
 
@@ -566,3 +617,163 @@ def buscar_dados_abertos_por_inscricoes(conn: sqlite3.Connection, numeros: list[
 
 def count_dividas_abertas_pgfn(conn: sqlite3.Connection) -> int:
     return conn.execute("SELECT COUNT(*) AS n FROM pgfn_dividas_abertas").fetchone()["n"]
+
+
+def create_documento(
+    conn: sqlite3.Connection, cnpj_id: int, tipo: str, nome_arquivo: str, arquivo_conteudo: bytes,
+) -> Documento:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        "INSERT INTO documentos (cnpj_id, tipo, nome_arquivo, arquivo_conteudo, criado_em) VALUES (?, ?, ?, ?, ?)",
+        (cnpj_id, tipo, nome_arquivo, arquivo_conteudo, criado_em),
+    )
+    conn.commit()
+    return Documento(id=cursor.lastrowid, cnpj_id=cnpj_id, tipo=tipo, nome_arquivo=nome_arquivo, criado_em=criado_em)  # type: ignore[arg-type]
+
+
+def list_documentos(conn: sqlite3.Connection, cnpj_id: int) -> list[Documento]:
+    rows = conn.execute(
+        "SELECT id, cnpj_id, tipo, nome_arquivo, criado_em FROM documentos WHERE cnpj_id = ? ORDER BY id DESC",
+        (cnpj_id,),
+    ).fetchall()
+    return [_row_to_documento(row) for row in rows]
+
+
+def get_documento(conn: sqlite3.Connection, documento_id: int) -> Documento | None:
+    row = conn.execute(
+        "SELECT id, cnpj_id, tipo, nome_arquivo, criado_em FROM documentos WHERE id = ?", (documento_id,)
+    ).fetchone()
+    return _row_to_documento(row) if row else None
+
+
+def get_documento_arquivo(conn: sqlite3.Connection, documento_id: int) -> bytes | None:
+    row = conn.execute("SELECT arquivo_conteudo FROM documentos WHERE id = ?", (documento_id,)).fetchone()
+    return bytes(row["arquivo_conteudo"]) if row else None
+
+
+def _row_to_documento(row: sqlite3.Row) -> Documento:
+    return Documento(
+        id=row["id"], cnpj_id=row["cnpj_id"], tipo=row["tipo"], nome_arquivo=row["nome_arquivo"],
+        criado_em=row["criado_em"],
+    )
+
+
+def create_oportunidade_credito(
+    conn: sqlite3.Connection, cnpj_id: int, tipo: str, descricao: str, valor_estimado: float | None = None,
+    evidencia: str | None = None,
+) -> OportunidadeCredito:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        """
+        INSERT INTO oportunidades_credito (cnpj_id, tipo, descricao, valor_estimado, status, evidencia, criado_em)
+        VALUES (?, ?, ?, ?, 'identificada', ?, ?)
+        """,
+        (cnpj_id, tipo, descricao, valor_estimado, evidencia, criado_em),
+    )
+    conn.commit()
+    return OportunidadeCredito(
+        id=cursor.lastrowid, cnpj_id=cnpj_id, tipo=tipo, descricao=descricao, valor_estimado=valor_estimado,  # type: ignore[arg-type]
+        status="identificada", evidencia=evidencia, criado_em=criado_em,
+    )
+
+
+def list_oportunidades_credito(conn: sqlite3.Connection, cnpj_id: int) -> list[OportunidadeCredito]:
+    rows = conn.execute(
+        "SELECT * FROM oportunidades_credito WHERE cnpj_id = ? ORDER BY id DESC", (cnpj_id,)
+    ).fetchall()
+    return [_row_to_oportunidade_credito(row) for row in rows]
+
+
+def set_oportunidade_credito_status(conn: sqlite3.Connection, oportunidade_id: int, status: str) -> None:
+    conn.execute("UPDATE oportunidades_credito SET status = ? WHERE id = ?", (status, oportunidade_id))
+    conn.commit()
+
+
+def _row_to_oportunidade_credito(row: sqlite3.Row) -> OportunidadeCredito:
+    return OportunidadeCredito(
+        id=row["id"], cnpj_id=row["cnpj_id"], tipo=row["tipo"], descricao=row["descricao"],
+        valor_estimado=row["valor_estimado"], status=row["status"], evidencia=row["evidencia"],
+        criado_em=row["criado_em"],
+    )
+
+
+def create_honorario(conn: sqlite3.Connection, tenant_id: int, competencia: str, valor: float, vencimento: str) -> Honorario:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    cursor = conn.execute(
+        """
+        INSERT INTO honorarios (tenant_id, competencia, valor, status, vencimento, criado_em)
+        VALUES (?, ?, ?, 'pendente', ?, ?)
+        """,
+        (tenant_id, competencia, valor, vencimento, criado_em),
+    )
+    conn.commit()
+    return Honorario(
+        id=cursor.lastrowid, tenant_id=tenant_id, competencia=competencia, valor=valor, status="pendente",  # type: ignore[arg-type]
+        vencimento=vencimento, criado_em=criado_em,
+    )
+
+
+def list_honorarios(conn: sqlite3.Connection, tenant_id: int) -> list[Honorario]:
+    rows = conn.execute(
+        "SELECT * FROM honorarios WHERE tenant_id = ? ORDER BY competencia DESC", (tenant_id,)
+    ).fetchall()
+    return [_row_to_honorario(row) for row in rows]
+
+
+def set_honorario_status(conn: sqlite3.Connection, honorario_id: int, status: str) -> None:
+    conn.execute("UPDATE honorarios SET status = ? WHERE id = ?", (status, honorario_id))
+    conn.commit()
+
+
+def honorarios_pendentes_resumo(conn: sqlite3.Connection) -> dict:
+    """Agregado pra `/admin/status` — total pendente/atrasado em todos os
+    tenants, numa consulta só (sem loop por tenant)."""
+    row = conn.execute(
+        """
+        SELECT
+            SUM(CASE WHEN status = 'pendente' THEN valor ELSE 0 END) AS total_pendente,
+            SUM(CASE WHEN status = 'atrasado' THEN valor ELSE 0 END) AS total_atrasado,
+            SUM(CASE WHEN status = 'pendente' THEN 1 ELSE 0 END) AS qtd_pendente,
+            SUM(CASE WHEN status = 'atrasado' THEN 1 ELSE 0 END) AS qtd_atrasado
+        FROM honorarios
+        """
+    ).fetchone()
+    return {
+        "total_pendente": row["total_pendente"] or 0.0,
+        "total_atrasado": row["total_atrasado"] or 0.0,
+        "qtd_pendente": row["qtd_pendente"] or 0,
+        "qtd_atrasado": row["qtd_atrasado"] or 0,
+    }
+
+
+def _row_to_honorario(row: sqlite3.Row) -> Honorario:
+    return Honorario(
+        id=row["id"], tenant_id=row["tenant_id"], competencia=row["competencia"], valor=row["valor"],
+        status=row["status"], vencimento=row["vencimento"], criado_em=row["criado_em"],
+    )
+
+
+def registrar_auditoria(
+    conn: sqlite3.Connection, quem: str, acao: str, entidade: str, entidade_id: int | None = None,
+    detalhes: str | None = None,
+) -> None:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO auditoria_eventos (quem, acao, entidade, entidade_id, detalhes, criado_em) VALUES (?, ?, ?, ?, ?, ?)",
+        (quem, acao, entidade, entidade_id, detalhes, criado_em),
+    )
+    conn.commit()
+
+
+def list_auditoria(conn: sqlite3.Connection, limite: int = 200) -> list[AuditoriaEvento]:
+    rows = conn.execute(
+        "SELECT * FROM auditoria_eventos ORDER BY id DESC LIMIT ?", (limite,)
+    ).fetchall()
+    return [_row_to_auditoria(row) for row in rows]
+
+
+def _row_to_auditoria(row: sqlite3.Row) -> AuditoriaEvento:
+    return AuditoriaEvento(
+        id=row["id"], quem=row["quem"], acao=row["acao"], entidade=row["entidade"],
+        entidade_id=row["entidade_id"], detalhes=row["detalhes"], criado_em=row["criado_em"],
+    )

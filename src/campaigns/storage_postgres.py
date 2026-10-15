@@ -121,6 +121,7 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
 
             cur.execute("ALTER TABLE campanha_leads ADD COLUMN IF NOT EXISTS telefone TEXT")
             cur.execute("ALTER TABLE campanha_leads ADD COLUMN IF NOT EXISTS whatsapp_contatado_em TEXT")
+            cur.execute("ALTER TABLE campanha_leads ADD COLUMN IF NOT EXISTS estagio TEXT NOT NULL DEFAULT 'novo'")
             # Follow-up virou 1x (5 dias depois), não mais 3x (3 em 3 dias) —
             # remove os templates dos follow-ups que deixaram de existir.
             cur.execute("DELETE FROM campanha_templates WHERE tipo IN ('followup_2', 'followup_3')")
@@ -352,7 +353,14 @@ def _row_to_lead(row) -> Lead:
         id=row["id"], cnpj=row["cnpj"], tese=row["tese"], razao_social=row["razao_social"], email=row["email"],
         status=row["status"], criado_em=row["criado_em"], valor_divida=row["valor_divida"],
         telefone=row["telefone"], whatsapp_contatado_em=row["whatsapp_contatado_em"],
+        estagio=row.get("estagio") or "novo",
     )
+
+
+def set_lead_estagio(conn, lead_id: int, estagio: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE campanha_leads SET estagio = %s WHERE id = %s", (estagio, lead_id))
+    conn.commit()
 
 
 def create_envio(conn, lead_id: int, tipo: str, tracking_token: str | None = None) -> Envio:

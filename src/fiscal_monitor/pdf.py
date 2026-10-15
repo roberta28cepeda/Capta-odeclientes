@@ -24,7 +24,7 @@ from src.fiscal_monitor.infosimples import (
     formatar_valor_brl,
 )
 from src.fiscal_monitor.preanalise import PreAnalise
-from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
+from src.fiscal_monitor.storage import Cnpj, Finding, OportunidadeCredito, Tenant
 
 _TABLE_COLS = [2.2 * cm, 2 * cm, 6 * cm, 2.5 * cm, 2.5 * cm, 2.3 * cm]
 
@@ -94,6 +94,7 @@ def render_dossie_fiscal_pdf(
     situacao_fgts: SituacaoFgts | None = None,
     situacao_cndt: SituacaoCndt | None = None,
     situacao_divida_rj: SituacaoDividaAtivaPgeRj | None = None,
+    oportunidades_credito: list[OportunidadeCredito] | None = None,
 ) -> None:
     """Dossiê consolidado de situação fiscal de um CNPJ já na carteira do
     escritório (diferente de `render_pre_analise_pdf`, que é pro fluxo de
@@ -164,6 +165,25 @@ def render_dossie_fiscal_pdf(
         story.append(Paragraph(f"Consta dívida: {_sim_nao(situacao_divida_rj.consta_divida)}", BODY_STYLE))
         if situacao_divida_rj.total_divida:
             story.append(Paragraph(f"Total da dívida: R$ {formatar_valor_brl(situacao_divida_rj.total_divida)}", BODY_STYLE))
+
+    if oportunidades_credito:
+        story.append(Paragraph("Oportunidades de Crédito Tributário (registro manual)", HEADING_STYLE))
+        story.append(
+            Paragraph(
+                "Registro manual — o sistema não identifica oportunidades de crédito automaticamente; "
+                "lista abaixo o que já foi identificado e registrado pelo escritório.",
+                BODY_STYLE,
+            )
+        )
+        for oportunidade in oportunidades_credito:
+            valor = (
+                f" — estimativa R$ {formatar_valor_brl(oportunidade.valor_estimado)}"
+                if oportunidade.valor_estimado
+                else ""
+            )
+            story.append(
+                Paragraph(f"• [{oportunidade.status}] {oportunidade.descricao}{valor}", BULLET_STYLE)
+            )
 
     story.append(Paragraph("Alertas", ALERT_HEADING_STYLE))
     for alerta in alertas:

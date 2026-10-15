@@ -20,7 +20,7 @@ from flask import Blueprint, Response, current_app, jsonify, redirect, render_te
 
 from src.campaigns import brevo_client, engine, storage, tracking
 from src.campaigns.brevo_client import BrevoSyncError
-from src.campaigns.models import TIPOS_ENVIO
+from src.campaigns.models import ESTAGIOS_LEAD, TIPOS_ENVIO
 from src.campaigns.templates import DEFAULT_TEMPLATES
 from src.common.web_styles import page
 from src.common.webauth import cron_authorized, require_admin
@@ -31,6 +31,26 @@ bp = Blueprint("campaigns", __name__)
 def _connect():
     db_path = current_app.config.get("CAMPAIGNS_DB_PATH") or storage.DEFAULT_DB_PATH
     return storage.connect(db_path)
+
+
+def _connect_fiscal():
+    """Conexão com o banco do `fiscal_monitor` (Carteira) — em produção é o
+    mesmo Postgres, tabelas com prefixo diferente; usado só pela conversão
+    de lead em cliente, que cria tenant/CNPJ do outro lado (ver
+    `src.campaigns.engine`/`phone_finder.py`, que já importam de
+    `fiscal_monitor` — mesmo padrão de dependência cruzada entre módulos).
+    """
+    from src.fiscal_monitor import storage as fiscal_storage
+
+    db_path = current_app.config.get("DB_PATH") or fiscal_storage.DEFAULT_DB_PATH
+    return fiscal_storage.connect(db_path)
+
+
+def _quem_atual() -> str:
+    auth = request.authorization
+    if auth and auth.username:
+        return auth.username
+    return "desconhecido"
 
 
 def _teses_conhecidas(conn) -> list[str]:
@@ -75,11 +95,15 @@ campanha; enviados contam só o período indicado na coluna.</small></p>
 </div>
 
 <div class="tabs">Teses:
-{% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}"{% if t == tese %} class="ativa"{% endif %}>{{ t }}</a>{% endfor %}
-<a href="/admin/campanhas/leads">(todas)</a>
+{% for t in teses %}<a href="/admin/campanhas/leads?tese={{ t }}{% if estagio_filtro %}&estagio={{ estagio_filtro }}{% endif %}"{% if t == tese %} class="ativa"{% endif %}>{{ t }}</a>{% endfor %}
+<a href="/admin/campanhas/leads{% if estagio_filtro %}?estagio={{ estagio_filtro }}{% endif %}">(todas)</a>
+</div>
+<div class="tabs">Estágio do funil:
+{% for e in estagios %}<a href="/admin/campanhas/leads?estagio={{ e }}{% if tese %}&tese={{ tese }}{% endif %}"{% if e == estagio_filtro %} class="ativa"{% endif %}>{{ e }}</a>{% endfor %}
+<a href="/admin/campanhas/leads{% if tese %}?tese={{ tese }}{% endif %}">(todos)</a>
 </div>
 <table>
-<tr><th>CNPJ</th><th>Tese</th><th>Razão social</th><th>Valor dívida</th><th>E-mail</th><th>Status</th><th>Envios</th></tr>
+<tr><th>CNPJ</th><th>Tese</th><th>Razão social</th><th>Valor dívida</th><th>E-mail</th><th>Status</th><th>Envios</th><th>Estágio</th><th></th></tr>
 {% for lead, envios in leads %}
 <tr>
   <td>{{ lead.cnpj }}</td>
@@ -89,6 +113,20 @@ campanha; enviados contam só o período indicado na coluna.</small></p>
   <td>{{ lead.email or "(sem e-mail)" }}</td>
   <td>{{ lead.status }}</td>
   <td>{{ envios|join(", ") if envios else "-" }}</td>
+  <td>
+    <form method="post" action="/admin/campanhas/leads/{{ lead.id }}/estagio?tese={{ tese or '' }}&estagio_filtro={{ estagio_filtro or '' }}" class="inline">
+      <select name="estagio" onchange="this.form.submit()">
+        {% for e in estagios %}<option value="{{ e }}" {% if e == lead.estagio %}selected{% endif %}>{{ e }}</option>{% endfor %}
+      </select>
+    </form>
+  </td>
+  <td>
+    {% if lead.estagio == "fechado" %}
+    <form method="post" action="/admin/campanhas/leads/{{ lead.id }}/converter-em-cliente" class="inline">
+      <button type="submit">Converter em cliente</button>
+    </form>
+    {% endif %}
+  </td>
 </tr>
 {% endfor %}
 </table>
@@ -246,7 +284,10 @@ def listar_leads():
         return unauthorized
     conn = _connect()
     tese = request.args.get("tese") or None
+    estagio_filtro = request.args.get("estagio") or None
     leads_db = storage.list_leads(conn, tese=tese)
+    if estagio_filtro:
+        leads_db = [lead for lead in leads_db if lead.estagio == estagio_filtro]
     # Antes disso, cada lead disparava sua própria consulta de envios (N+1)
     # — com a lista de leads já na casa dos milhares (importação da PGFN),
     # essa página sozinha estourava o timeout de 300s do Vercel e ficava
@@ -257,7 +298,58 @@ def listar_leads():
     hoje_iso = datetime.combine(date.today(), time.min, tzinfo=timezone.utc).isoformat()
     semana_iso = datetime.combine(date.today() - timedelta(days=7), time.min, tzinfo=timezone.utc).isoformat()
     metricas = storage.metricas_por_tese(conn, hoje_iso, semana_iso)
-    return render_template_string(_LEADS_TEMPLATE, leads=leads, tese=tese, teses=_teses_conhecidas(conn), metricas=metricas)
+    return render_template_string(
+        _LEADS_TEMPLATE, leads=leads, tese=tese, teses=_teses_conhecidas(conn), metricas=metricas,
+        estagios=ESTAGIOS_LEAD, estagio_filtro=estagio_filtro,
+    )
+
+
+@bp.post("/admin/campanhas/leads/<int:lead_id>/estagio")
+def mudar_estagio_lead(lead_id: int):
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    estagio = request.form.get("estagio") or ""
+    conn = _connect()
+    if estagio in ESTAGIOS_LEAD:
+        storage.set_lead_estagio(conn, lead_id, estagio)
+    tese = request.args.get("tese", "")
+    estagio_filtro = request.args.get("estagio_filtro", "")
+    destino = "/admin/campanhas/leads?"
+    partes = []
+    if tese:
+        partes.append(f"tese={tese}")
+    if estagio_filtro:
+        partes.append(f"estagio={estagio_filtro}")
+    return redirect(destino + "&".join(partes))
+
+
+@bp.post("/admin/campanhas/leads/<int:lead_id>/converter-em-cliente")
+def converter_lead_em_cliente(lead_id: int):
+    """Fecha o elo Captação→Carteira: um lead marcado como "fechado" vira
+    tenant + CNPJ na carteira (módulo `fiscal_monitor`), sem precisar
+    recadastrar nada a mão — hoje em produção isso era 100% manual.
+    """
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    conn = _connect()
+    lead = storage.get_lead(conn, lead_id)
+    if lead is None:
+        return jsonify({"error": "lead não encontrado"}), 404
+
+    fiscal_conn = _connect_fiscal()
+    from src.fiscal_monitor import storage as fiscal_storage
+
+    nome_tenant = lead.razao_social or lead.cnpj
+    tenant = fiscal_storage.create_tenant(fiscal_conn, nome_tenant, contato_email=lead.email)
+    fiscal_storage.upsert_cnpj(fiscal_conn, tenant.id, lead.cnpj, razao_social=lead.razao_social)
+    fiscal_storage.registrar_auditoria(
+        fiscal_conn, _quem_atual(), "lead_convertido_em_cliente", "tenant", tenant.id,
+        f"lead_id={lead_id} cnpj={lead.cnpj} tese={lead.tese}",
+    )
+    fiscal_conn.close()
+    return redirect(f"/tenants/{tenant.id}")
 
 
 @bp.route("/admin/campanhas/leads/importar", methods=["GET", "POST"])

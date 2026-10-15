@@ -270,3 +270,102 @@ def test_latest_certidoes_by_orgao_returns_most_recent_per_orgao():
 def test_get_certidao_arquivo_returns_none_when_missing():
     conn = _conn()
     assert storage.get_certidao_arquivo(conn, 999) is None
+
+
+def test_create_and_list_documentos():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    doc = storage.create_documento(conn, cnpj.id, "contrato", "contrato.pdf", b"conteudo-fake")
+
+    assert doc.tipo == "contrato"
+    assert storage.list_documentos(conn, cnpj.id) == [doc]
+    assert storage.get_documento(conn, doc.id) == doc
+    assert storage.get_documento_arquivo(conn, doc.id) == b"conteudo-fake"
+
+
+def test_get_documento_arquivo_returns_none_when_missing():
+    conn = _conn()
+    assert storage.get_documento_arquivo(conn, 999) is None
+
+
+def test_create_and_list_oportunidades_credito():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    op = storage.create_oportunidade_credito(
+        conn, cnpj.id, "icms_st", "Crédito de ICMS-ST na entrada", valor_estimado=15000.0, evidencia="nf-e 123"
+    )
+
+    assert op.status == "identificada"
+    assert storage.list_oportunidades_credito(conn, cnpj.id) == [op]
+
+
+def test_set_oportunidade_credito_status_updates():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+    op = storage.create_oportunidade_credito(conn, cnpj.id, "icms_st", "Crédito de ICMS-ST")
+
+    storage.set_oportunidade_credito_status(conn, op.id, "validada")
+
+    assert storage.list_oportunidades_credito(conn, cnpj.id)[0].status == "validada"
+
+
+def test_create_and_list_honorarios():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+
+    hon = storage.create_honorario(conn, tenant.id, "2026-10", 1200.0, "2026-11-05")
+
+    assert hon.status == "pendente"
+    assert storage.list_honorarios(conn, tenant.id) == [hon]
+
+
+def test_set_honorario_status_updates():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    hon = storage.create_honorario(conn, tenant.id, "2026-10", 1200.0, "2026-11-05")
+
+    storage.set_honorario_status(conn, hon.id, "pago")
+
+    assert storage.list_honorarios(conn, tenant.id)[0].status == "pago"
+
+
+def test_honorarios_pendentes_resumo_aggregates_pendente_e_atrasado():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    pago = storage.create_honorario(conn, tenant.id, "2026-08", 1000.0, "2026-09-05")
+    storage.set_honorario_status(conn, pago.id, "pago")
+    storage.create_honorario(conn, tenant.id, "2026-09", 1100.0, "2026-10-05")
+    atrasado = storage.create_honorario(conn, tenant.id, "2026-10", 1200.0, "2026-11-05")
+    storage.set_honorario_status(conn, atrasado.id, "atrasado")
+
+    resumo = storage.honorarios_pendentes_resumo(conn)
+
+    assert resumo == {"total_pendente": 1100.0, "total_atrasado": 1200.0, "qtd_pendente": 1, "qtd_atrasado": 1}
+
+
+def test_registrar_auditoria_e_list_auditoria():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+
+    storage.registrar_auditoria(conn, "admin", "tenant_criado", "tenant", tenant.id, "via conversão de lead")
+
+    eventos = storage.list_auditoria(conn)
+    assert len(eventos) == 1
+    assert eventos[0].quem == "admin"
+    assert eventos[0].acao == "tenant_criado"
+    assert eventos[0].entidade_id == tenant.id
+
+
+def test_list_auditoria_orders_most_recent_first():
+    conn = _conn()
+    storage.registrar_auditoria(conn, "admin", "acao1", "tenant", 1)
+    storage.registrar_auditoria(conn, "admin", "acao2", "tenant", 1)
+
+    eventos = storage.list_auditoria(conn)
+
+    assert [e.acao for e in eventos] == ["acao2", "acao1"]

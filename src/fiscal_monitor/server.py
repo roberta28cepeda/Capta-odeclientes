@@ -47,7 +47,7 @@ from src.fiscal_monitor.preanalise import (
     only_digits,
     validar_cnpj,
 )
-from src.fiscal_monitor.models import ORGAOS_CERTIDAO
+from src.fiscal_monitor.models import ORGAOS_CERTIDAO, STATUS_HONORARIO, STATUS_OPORTUNIDADE_CREDITO, TIPOS_DOCUMENTO, TIPOS_OPORTUNIDADE_CREDITO
 from src.fiscal_monitor.providers import import_portfolio_csv
 from src.fiscal_monitor.reforma import FATURAMENTO_MAXIMO, FATURAMENTO_MINIMO, simular
 from src.fiscal_monitor.risco import calcular_score_risco, certidao_status, orgaos_exigidos
@@ -108,6 +108,7 @@ completa da carteira depois que o cliente fecha.</p>
   <a href="/admin/usuarios">Usuários da equipe</a>
   <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
   <a href="/admin/status">Status do sistema</a>
+  <a href="/admin/auditoria">Trilha de auditoria</a>
 </nav>
 
 <p><small><a href="/privacidade">Política de Privacidade e LGPD</a></small></p>
@@ -162,6 +163,7 @@ _TENANT_DETAIL_TEMPLATE = page("{{ tenant.nome }}", """
 <h1>{{ tenant.nome }}</h1>
 <nav class="nav">
   <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
+  <a href="/tenants/{{ tenant.id }}/financeiro?token={{ request.args.get('token', '') }}">Financeiro</a>
 </nav>
 
 <h2>Carteira</h2>
@@ -177,7 +179,9 @@ _TENANT_DETAIL_TEMPLATE = page("{{ tenant.nome }}", """
   <td>
     <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/historico?token={{ request.args.get('token', '') }}">histórico</a> ·
     <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/obrigacoes?token={{ request.args.get('token', '') }}">obrigações</a> ·
-    <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/certidoes?token={{ request.args.get('token', '') }}">certidões</a>
+    <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/certidoes?token={{ request.args.get('token', '') }}">certidões</a> ·
+    <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/documentos?token={{ request.args.get('token', '') }}">documentos</a> ·
+    <a href="/tenants/{{ tenant.id }}/cnpjs/{{ cnpj.id }}/oportunidades?token={{ request.args.get('token', '') }}">oportunidades de crédito</a>
   </td>
 </tr>
 {% endfor %}
@@ -213,6 +217,54 @@ _TENANT_DETAIL_TEMPLATE = page("{{ tenant.nome }}", """
 {% endfor %}
 </table>
 {% if not findings %}<p>Nenhum achado em aberto.</p>{% endif %}
+
+<h2>Documentos</h2>
+<table>
+<tr><th>CNPJ</th><th>Tipo</th><th>Arquivo</th><th>Enviado em</th></tr>
+{% for cnpj in cnpjs %}
+{% for documento in documentos_por_cnpj.get(cnpj.id, []) %}
+<tr>
+  <td>{{ cnpj.cnpj }}</td>
+  <td>{{ documento.tipo }}</td>
+  <td>{{ documento.nome_arquivo }}</td>
+  <td>{{ documento.criado_em[:10] }}</td>
+</tr>
+{% endfor %}
+{% endfor %}
+</table>
+{% if not tem_documentos %}<p>Nenhum documento enviado ainda.</p>{% endif %}
+
+<h2>Oportunidades de crédito</h2>
+<p class="lede">Registro manual — o sistema não identifica oportunidades automaticamente.</p>
+<table>
+<tr><th>CNPJ</th><th>Tipo</th><th>Descrição</th><th>Valor estimado</th><th>Status</th></tr>
+{% for cnpj in cnpjs %}
+{% for oportunidade in oportunidades_por_cnpj.get(cnpj.id, []) %}
+<tr>
+  <td>{{ cnpj.cnpj }}</td>
+  <td>{{ oportunidade.tipo }}</td>
+  <td>{{ oportunidade.descricao }}</td>
+  <td>{{ "R$ %.2f"|format(oportunidade.valor_estimado) if oportunidade.valor_estimado else "-" }}</td>
+  <td>{{ oportunidade.status }}</td>
+</tr>
+{% endfor %}
+{% endfor %}
+</table>
+{% if not tem_oportunidades %}<p>Nenhuma oportunidade registrada ainda.</p>{% endif %}
+
+<h2>Honorários</h2>
+<table>
+<tr><th>Competência</th><th>Valor</th><th>Vencimento</th><th>Status</th></tr>
+{% for honorario in honorarios %}
+<tr>
+  <td>{{ honorario.competencia }}</td>
+  <td>R$ {{ "%.2f"|format(honorario.valor) }}</td>
+  <td>{{ honorario.vencimento }}</td>
+  <td>{{ honorario.status }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if not honorarios %}<p>Nenhum honorário lançado ainda.</p>{% endif %}
 """)
 
 _CNPJ_HISTORY_TEMPLATE = page("Histórico — {{ cnpj.cnpj }}", """
@@ -310,6 +362,119 @@ Abrir consulta de Atos Declaratórios Executivos (Receita Federal) &rarr;</a></p
 </tr>
 {% endfor %}
 </table>
+""")
+
+_DOCUMENTOS_TEMPLATE = page("Documentos — {{ cnpj.cnpj }}", """
+<p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
+<h1>Documentos — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+<p class="lede">Repositório de documentos do cliente (contrato, procuração, XML, outros) — diferente de
+"certidões", que tem data de validade e status de vencimento controlados pelo sistema.</p>
+
+<h2>Enviar documento</h2>
+<form method="post" enctype="multipart/form-data" class="card">
+  <label>Tipo
+    <select name="tipo" required>
+      {% for tipo in tipos %}<option value="{{ tipo }}">{{ tipo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Arquivo<input type="file" name="arquivo" required></label>
+  <button type="submit">Enviar</button>
+</form>
+
+<h2>Documentos enviados</h2>
+<table>
+<tr><th>Tipo</th><th>Arquivo</th><th>Enviado em</th><th></th></tr>
+{% for documento in documentos %}
+<tr>
+  <td>{{ documento.tipo }}</td>
+  <td>{{ documento.nome_arquivo }}</td>
+  <td>{{ documento.criado_em[:10] }}</td>
+  <td><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/documentos/{{ documento.id }}/baixar?token={{ request.args.get('token', '') }}">baixar</a></td>
+</tr>
+{% endfor %}
+</table>
+{% if not documentos %}<p>Nenhum documento enviado ainda.</p>{% endif %}
+""")
+
+_OPORTUNIDADES_TEMPLATE = page("Oportunidades de crédito — {{ cnpj.cnpj }}", """
+<p><a href="/tenants/{{ cnpj.tenant_id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
+<h1>Oportunidades de crédito — {{ cnpj.razao_social or cnpj.cnpj }} ({{ cnpj.cnpj }})</h1>
+<p class="lede">Registro manual — o sistema não identifica oportunidades de crédito
+automaticamente. Esta lista só mostra o que já foi identificado e registrado pelo escritório,
+pra acompanhar status e valor estimado com o cliente.</p>
+
+<h2>Registrar oportunidade</h2>
+<form method="post" class="card">
+  <label>Tipo
+    <select name="tipo" required>
+      {% for tipo in tipos %}<option value="{{ tipo }}">{{ tipo }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Descrição<input type="text" name="descricao" required></label>
+  <label>Valor estimado (R$, opcional)<input type="number" step="0.01" name="valor_estimado"></label>
+  <label>Evidência (opcional)<input type="text" name="evidencia"></label>
+  <button type="submit">Registrar</button>
+</form>
+
+<h2>Oportunidades registradas</h2>
+<table>
+<tr><th>Tipo</th><th>Descrição</th><th>Valor estimado</th><th>Status</th><th>Evidência</th><th></th></tr>
+{% for oportunidade in oportunidades %}
+<tr>
+  <td>{{ oportunidade.tipo }}</td>
+  <td>{{ oportunidade.descricao }}</td>
+  <td>{{ "R$ %.2f"|format(oportunidade.valor_estimado) if oportunidade.valor_estimado else "-" }}</td>
+  <td>
+    <form method="post" action="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/oportunidades/{{ oportunidade.id }}/status?token={{ request.args.get('token', '') }}" class="inline">
+      <select name="status" onchange="this.form.submit()">
+        {% for status in status_opcoes %}
+        <option value="{{ status }}" {% if status == oportunidade.status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </td>
+  <td>{{ oportunidade.evidencia or "-" }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if not oportunidades %}<p>Nenhuma oportunidade registrada ainda.</p>{% endif %}
+""")
+
+_FINANCEIRO_TEMPLATE = page("Financeiro — {{ tenant.nome }}", """
+<p><a href="/tenants/{{ tenant.id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
+<h1>Financeiro — {{ tenant.nome }}</h1>
+<p class="lede">Controle de honorários por competência — sem gateway de pagamento ainda,
+é um registro manual de cobrança.</p>
+
+<h2>Lançar honorário</h2>
+<form method="post" class="card">
+  <label>Competência (AAAA-MM)<input type="text" name="competencia" placeholder="2026-10" required></label>
+  <label>Valor (R$)<input type="number" step="0.01" name="valor" required></label>
+  <label>Vencimento<input type="date" name="vencimento" required></label>
+  <button type="submit">Lançar</button>
+</form>
+
+<h2>Honorários lançados</h2>
+<table>
+<tr><th>Competência</th><th>Valor</th><th>Vencimento</th><th>Status</th></tr>
+{% for honorario in honorarios %}
+<tr>
+  <td>{{ honorario.competencia }}</td>
+  <td>R$ {{ "%.2f"|format(honorario.valor) }}</td>
+  <td>{{ honorario.vencimento }}</td>
+  <td>
+    <form method="post" action="/tenants/{{ tenant.id }}/financeiro/{{ honorario.id }}/status?token={{ request.args.get('token', '') }}" class="inline">
+      <select name="status" onchange="this.form.submit()">
+        {% for status in status_opcoes %}
+        <option value="{{ status }}" {% if status == honorario.status %}selected{% endif %}>{{ status }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</table>
+{% if not honorarios %}<p>Nenhum honorário lançado ainda.</p>{% endif %}
 """)
 
 _REFORMA_TEMPLATE = page("Simulador da Reforma Tributária", """
@@ -467,6 +632,15 @@ nenhum valor de senha/token, só se está presente ou não.</p>
 {% endfor %}
 </table>
 
+<h2>Honorários</h2>
+<table>
+<tr><th>Pendentes</th><th>Atrasados</th></tr>
+<tr>
+  <td>{{ honorarios_resumo.qtd_pendente }} (R$ {{ "%.2f"|format(honorarios_resumo.total_pendente) }})</td>
+  <td>{{ honorarios_resumo.qtd_atrasado }} (R$ {{ "%.2f"|format(honorarios_resumo.total_atrasado) }})</td>
+</tr>
+</table>
+
 <h2>Dados Abertos da PGFN (pré-análise)</h2>
 <p>Inscrições importadas: <strong>{{ dividas_abertas_count }}</strong>
 {% if dividas_abertas_count == 0 %}— nenhuma ainda, então a pré-análise não mostra data de
@@ -494,6 +668,42 @@ inscrição nem ajuizamento/protesto pra nenhum CNPJ. <a href="/admin/pgfn-dados
 <tr><td>{{ tese }}</td><td>{{ email_status }}</td><td>{{ whatsapp_status }}</td></tr>
 {% endfor %}
 </table>
+""")
+
+_AUDITORIA_TEMPLATE = page("Trilha de auditoria", """
+<p><a href="/admin/status">&larr; voltar</a></p>
+<h1>Trilha de auditoria</h1>
+<p class="lede">Quem fez o quê, quando — registrado pra ações de escrita criadas a partir
+desta fase (documento enviado, oportunidade de crédito registrada/alterada, honorário
+lançado/alterado, lead convertido em cliente). Não cobre retroativamente o que já existia
+antes dessa trilha.</p>
+
+<form method="get" class="card">
+  <label>Entidade
+    <select name="entidade">
+      <option value="">todas</option>
+      {% for entidade in entidades %}
+      <option value="{{ entidade }}" {% if entidade == entidade_filtro %}selected{% endif %}>{{ entidade }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Filtrar</button>
+</form>
+
+<table>
+<tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Entidade</th><th>ID</th><th>Detalhes</th></tr>
+{% for evento in eventos %}
+<tr>
+  <td>{{ evento.criado_em[:19] }}</td>
+  <td>{{ evento.quem }}</td>
+  <td>{{ evento.acao }}</td>
+  <td>{{ evento.entidade }}</td>
+  <td>{{ evento.entidade_id or "-" }}</td>
+  <td>{{ evento.detalhes or "-" }}</td>
+</tr>
+{% endfor %}
+</table>
+{% if not eventos %}<p>Nenhum evento registrado ainda.</p>{% endif %}
 """)
 
 _TENANT_CRIADO_TEMPLATE = page("Escritório cadastrado", """
@@ -603,6 +813,17 @@ def _tenant_authorized(tenant: storage.Tenant) -> bool:
         return True
     token = request.args.get("token", "")
     return bool(tenant.acesso_token) and secrets.compare_digest(token, tenant.acesso_token)
+
+
+def _quem_atual() -> str:
+    """Identificação de quem fez a ação, pra trilha de auditoria — login
+    individual/mestre quando autenticado por senha, ou "acesso por token"
+    quando é o próprio tenant entrando pelo link dele (não dá pra saber
+    qual pessoa física é, só que veio por ali)."""
+    auth = request.authorization
+    if auth and auth.username:
+        return auth.username
+    return "acesso por token (tenant)"
 
 
 def create_app(
@@ -849,6 +1070,7 @@ def create_app(
 
         conn = _connect()
         dividas_abertas_count = storage.count_dividas_abertas_pgfn(conn)
+        honorarios_resumo = storage.honorarios_pendentes_resumo(conn)
         conn.close()
 
         campanhas_conn = campaigns_storage.connect(campaigns_db_path or campaigns_storage.DEFAULT_DB_PATH)
@@ -876,8 +1098,25 @@ def create_app(
             _STATUS_TEMPLATE,
             integracoes=integracoes,
             dividas_abertas_count=dividas_abertas_count,
+            honorarios_resumo=honorarios_resumo,
             leads_por_tese=leads_por_tese,
             templates_status=templates_status,
+        )
+
+    @app.get("/admin/auditoria")
+    def auditoria():
+        unauthorized = require_admin()
+        if unauthorized:
+            return unauthorized
+        entidade_filtro = request.args.get("entidade") or None
+        conn = _connect()
+        eventos = storage.list_auditoria(conn)
+        conn.close()
+        entidades = sorted({evento.entidade for evento in eventos})
+        if entidade_filtro:
+            eventos = [evento for evento in eventos if evento.entidade == entidade_filtro]
+        return render_template_string(
+            _AUDITORIA_TEMPLATE, eventos=eventos, entidades=entidades, entidade_filtro=entidade_filtro
         )
 
     @app.route("/pre-analise", methods=["GET", "POST"])
@@ -1108,6 +1347,9 @@ def create_app(
             )
             for cnpj in cnpjs
         }
+        documentos_por_cnpj = {cnpj.id: storage.list_documentos(conn, cnpj.id) for cnpj in cnpjs}
+        oportunidades_por_cnpj = {cnpj.id: storage.list_oportunidades_credito(conn, cnpj.id) for cnpj in cnpjs}
+        honorarios = storage.list_honorarios(conn, tenant_id)
         conn.close()
         return render_template_string(
             _TENANT_DETAIL_TEMPLATE,
@@ -1116,6 +1358,11 @@ def create_app(
             findings=findings,
             sublimite_alerts=sublimite_alerts,
             scores=scores,
+            documentos_por_cnpj=documentos_por_cnpj,
+            oportunidades_por_cnpj=oportunidades_por_cnpj,
+            tem_documentos=any(documentos_por_cnpj.values()),
+            tem_oportunidades=any(oportunidades_por_cnpj.values()),
+            honorarios=honorarios,
         )
 
     @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/historico")
@@ -1139,6 +1386,16 @@ def create_app(
         if tenant is None or cnpj is None or cnpj.tenant_id != tenant_id:
             return None, None
         return tenant, cnpj
+
+    def _listar_oportunidades_para_dossie(cnpj_id: int) -> list:
+        """Abre conexão própria — chamada depois que a rota do dossiê já
+        fechou a conexão original (antes das consultas lentas na
+        InfoSimples, pra não segurar conexão aberta durante elas)."""
+        conn = _connect()
+        try:
+            return storage.list_oportunidades_credito(conn, cnpj_id)
+        finally:
+            conn.close()
 
     @app.route("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/obrigacoes", methods=["GET", "POST"])
     def obrigacoes(tenant_id: int, cnpj_id: int):
@@ -1335,6 +1592,7 @@ def create_app(
             situacao_fgts=situacao_fgts,
             situacao_cndt=situacao_cndt,
             situacao_divida_rj=situacao_divida_rj,
+            oportunidades_credito=_listar_oportunidades_para_dossie(cnpj_id),
         )
 
         @after_this_request
@@ -1349,6 +1607,160 @@ def create_app(
             download_name=f"dossie_fiscal_{only_digits(cnpj.cnpj)}.pdf",
             mimetype="application/pdf",
         )
+
+    @app.route("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/documentos", methods=["GET", "POST"])
+    def documentos(tenant_id: int, cnpj_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        if request.method == "POST":
+            tipo = (request.form.get("tipo") or "").strip()
+            arquivo = request.files.get("arquivo")
+            if tipo in TIPOS_DOCUMENTO and arquivo and arquivo.filename:
+                documento = storage.create_documento(conn, cnpj_id, tipo, arquivo.filename, arquivo.read())
+                storage.registrar_auditoria(
+                    conn, _quem_atual(), "documento_enviado", "documento", documento.id,
+                    f"cnpj_id={cnpj_id} tipo={tipo} arquivo={arquivo.filename}",
+                )
+
+        documentos_lista = storage.list_documentos(conn, cnpj_id)
+        conn.close()
+        return render_template_string(
+            _DOCUMENTOS_TEMPLATE, cnpj=cnpj, documentos=documentos_lista, tipos=sorted(TIPOS_DOCUMENTO)
+        )
+
+    @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/documentos/<int:documento_id>/baixar")
+    def baixar_documento(tenant_id: int, cnpj_id: int, documento_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+        documento = storage.get_documento(conn, documento_id)
+        arquivo = storage.get_documento_arquivo(conn, documento_id)
+        conn.close()
+        if documento is None or arquivo is None or documento.cnpj_id != cnpj_id:
+            return jsonify({"error": "documento não encontrado"}), 404
+        return Response(
+            arquivo, mimetype="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={documento.nome_arquivo}"},
+        )
+
+    @app.route("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/oportunidades", methods=["GET", "POST"])
+    def oportunidades(tenant_id: int, cnpj_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        if request.method == "POST":
+            tipo = (request.form.get("tipo") or "").strip()
+            descricao = (request.form.get("descricao") or "").strip()
+            evidencia = (request.form.get("evidencia") or "").strip() or None
+            valor_estimado_raw = (request.form.get("valor_estimado") or "").strip()
+            valor_estimado = float(valor_estimado_raw) if valor_estimado_raw else None
+            if tipo in TIPOS_OPORTUNIDADE_CREDITO and descricao:
+                oportunidade = storage.create_oportunidade_credito(
+                    conn, cnpj_id, tipo, descricao, valor_estimado, evidencia
+                )
+                storage.registrar_auditoria(
+                    conn, _quem_atual(), "oportunidade_credito_registrada", "oportunidade_credito",
+                    oportunidade.id, f"cnpj_id={cnpj_id} tipo={tipo}",
+                )
+
+        oportunidades_lista = storage.list_oportunidades_credito(conn, cnpj_id)
+        conn.close()
+        return render_template_string(
+            _OPORTUNIDADES_TEMPLATE, cnpj=cnpj, oportunidades=oportunidades_lista,
+            tipos=sorted(TIPOS_OPORTUNIDADE_CREDITO), status_opcoes=STATUS_OPORTUNIDADE_CREDITO,
+        )
+
+    @app.post("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/oportunidades/<int:oportunidade_id>/status")
+    def mudar_status_oportunidade(tenant_id: int, cnpj_id: int, oportunidade_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+        status = (request.form.get("status") or "").strip()
+        if status in STATUS_OPORTUNIDADE_CREDITO:
+            storage.set_oportunidade_credito_status(conn, oportunidade_id, status)
+            storage.registrar_auditoria(
+                conn, _quem_atual(), "oportunidade_credito_status_alterado", "oportunidade_credito",
+                oportunidade_id, f"cnpj_id={cnpj_id} status={status}",
+            )
+        conn.close()
+        token = request.args.get("token", "")
+        return redirect(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/oportunidades?token={token}")
+
+    @app.route("/tenants/<int:tenant_id>/financeiro", methods=["GET", "POST"])
+    def financeiro(tenant_id: int):
+        conn = _connect()
+        tenant = storage.get_tenant(conn, tenant_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "escritório não encontrado"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        if request.method == "POST":
+            competencia = (request.form.get("competencia") or "").strip()
+            vencimento = (request.form.get("vencimento") or "").strip()
+            valor_raw = (request.form.get("valor") or "").strip()
+            try:
+                valor = float(valor_raw)
+            except ValueError:
+                valor = None
+            if competencia and vencimento and valor is not None:
+                honorario = storage.create_honorario(conn, tenant_id, competencia, valor, vencimento)
+                storage.registrar_auditoria(
+                    conn, _quem_atual(), "honorario_lancado", "honorario", honorario.id,
+                    f"tenant_id={tenant_id} competencia={competencia} valor={valor}",
+                )
+
+        honorarios_lista = storage.list_honorarios(conn, tenant_id)
+        conn.close()
+        return render_template_string(
+            _FINANCEIRO_TEMPLATE, tenant=tenant, honorarios=honorarios_lista, status_opcoes=STATUS_HONORARIO
+        )
+
+    @app.post("/tenants/<int:tenant_id>/financeiro/<int:honorario_id>/status")
+    def mudar_status_honorario(tenant_id: int, honorario_id: int):
+        conn = _connect()
+        tenant = storage.get_tenant(conn, tenant_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "escritório não encontrado"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+        status = (request.form.get("status") or "").strip()
+        if status in STATUS_HONORARIO:
+            storage.set_honorario_status(conn, honorario_id, status)
+            storage.registrar_auditoria(
+                conn, _quem_atual(), "honorario_status_alterado", "honorario", honorario_id,
+                f"tenant_id={tenant_id} status={status}",
+            )
+        conn.close()
+        token = request.args.get("token", "")
+        return redirect(f"/tenants/{tenant_id}/financeiro?token={token}")
 
     @app.get("/reforma-tributaria")
     def reforma_tributaria():

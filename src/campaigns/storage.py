@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 
-from src.campaigns.models import Envio, Evento, Lead, Template  # noqa: F401
+from src.campaigns.models import ESTAGIO_PADRAO, ESTAGIOS_LEAD, Envio, Evento, Lead, Template  # noqa: F401
 
 if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.environ.get("POSTGRES_URL_NON_POOLING"):
     from src.campaigns.storage_postgres import (  # noqa: F401
@@ -41,6 +41,7 @@ if os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL") or os.enviro
         marcar_notificado_hoje,
         metricas_por_tese,
         set_lead_email,
+        set_lead_estagio,
         set_lead_telefone,
         set_lead_whatsapp_contatado,
         set_template,
@@ -76,6 +77,7 @@ else:
         marcar_notificado_hoje,
         metricas_por_tese,
         set_lead_email,
+        set_lead_estagio,
         set_lead_telefone,
         set_lead_whatsapp_contatado,
         set_template,

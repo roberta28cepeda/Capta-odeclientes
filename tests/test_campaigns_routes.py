@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from src.campaigns import storage as campaigns_storage
+from src.fiscal_monitor import storage as fiscal_storage
 from src.fiscal_monitor.server import create_app
 
 TESE = "transportadoras_pgfn"
@@ -25,10 +26,14 @@ def campaigns_db_path():
 
 
 @pytest.fixture
-def app(campaigns_db_path):
+def fiscal_db_path():
     with tempfile.TemporaryDirectory() as tmp:
-        fiscal_db = os.path.join(tmp, "fiscal_monitor.db")
-        yield create_app(db_path=fiscal_db, campaigns_db_path=campaigns_db_path)
+        yield os.path.join(tmp, "fiscal_monitor.db")
+
+
+@pytest.fixture
+def app(campaigns_db_path, fiscal_db_path):
+    yield create_app(db_path=fiscal_db_path, campaigns_db_path=campaigns_db_path)
 
 
 def test_listar_leads_requires_admin(app):
@@ -650,6 +655,23 @@ def test_status_sistema_shows_integrations_and_data_state(app, monkeypatch, camp
     assert "texto real".encode() in response.data
 
 
+def test_status_sistema_shows_honorarios_pendentes_e_atrasados(app, monkeypatch, fiscal_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+
+    conn = fiscal_storage.connect(fiscal_db_path)
+    tenant = fiscal_storage.create_tenant(conn, "Escritório A")
+    fiscal_storage.create_honorario(conn, tenant.id, "2026-10", 1000.0, "2026-11-05")
+    honorario_atrasado = fiscal_storage.create_honorario(conn, tenant.id, "2026-09", 500.0, "2026-10-05")
+    fiscal_storage.set_honorario_status(conn, honorario_atrasado.id, "atrasado")
+    conn.close()
+
+    response = app.test_client().get("/admin/status", headers=_basic_auth_header("admin", "senha-secreta"))
+
+    assert response.status_code == 200
+    assert b"1000.00" in response.data
+    assert b"500.00" in response.data
+
+
 def test_listar_leads_shows_metricas_e_rodar_agora(app, monkeypatch, campaigns_db_path):
     """A aba de Captação precisa ter tanto o link pra disparar a campanha
     quanto um painel de métricas (enviados, aberturas, cliques) — não pode
@@ -691,6 +713,113 @@ def test_listar_leads_metricas_contam_enviados_aberturas_e_cliques(app, monkeypa
     assert metricas[TESE]["enviados_semana"] == 2
     assert metricas[TESE]["aberturas"] == 1
     assert metricas[TESE]["cliques"] == 0
+
+
+def test_mudar_estagio_lead_requires_admin(app, campaigns_db_path):
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    response = app.test_client().post(f"/admin/campanhas/leads/{lead.id}/estagio", data={"estagio": "qualificado"})
+    assert response.status_code == 401
+
+
+def test_mudar_estagio_lead_atualiza_e_redireciona(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+
+    response = app.test_client().post(
+        f"/admin/campanhas/leads/{lead.id}/estagio", data={"estagio": "qualificado"},
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+
+    assert response.status_code == 302
+    assert campaigns_storage.get_lead(conn, lead.id).estagio == "qualificado"
+
+
+def test_mudar_estagio_lead_ignora_valor_invalido(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+
+    app.test_client().post(
+        f"/admin/campanhas/leads/{lead.id}/estagio", data={"estagio": "valor-invalido"},
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+
+    assert campaigns_storage.get_lead(conn, lead.id).estagio == "novo"
+
+
+def test_listar_leads_filtra_por_estagio(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead1 = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    campaigns_storage.create_lead(conn, "22.333.444/0001-55", TESE, razao_social="Empresa Y")
+    campaigns_storage.set_lead_estagio(conn, lead1.id, "fechado")
+
+    response = app.test_client().get(
+        "/admin/campanhas/leads?estagio=fechado", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+
+    assert response.status_code == 200
+    assert b"Empresa X" in response.data
+    assert b"Empresa Y" not in response.data
+
+
+def test_converter_lead_em_cliente_requires_admin(app, campaigns_db_path):
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+    response = app.test_client().post(f"/admin/campanhas/leads/{lead.id}/converter-em-cliente")
+    assert response.status_code == 401
+
+
+def test_converter_lead_em_cliente_cria_tenant_e_cnpj(app, monkeypatch, campaigns_db_path, fiscal_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(
+        conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com"
+    )
+    campaigns_storage.set_lead_estagio(conn, lead.id, "fechado")
+
+    response = app.test_client().post(
+        f"/admin/campanhas/leads/{lead.id}/converter-em-cliente",
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+
+    assert response.status_code == 302
+    fiscal_conn = fiscal_storage.connect(fiscal_db_path)
+    tenants = fiscal_storage.list_tenants(fiscal_conn)
+    assert len(tenants) == 1
+    assert tenants[0].nome == "Empresa X"
+    assert tenants[0].contato_email == "x@exemplo.com"
+    cnpjs = fiscal_storage.list_cnpjs(fiscal_conn, tenants[0].id)
+    assert len(cnpjs) == 1
+    assert cnpjs[0].cnpj == "11.222.333/0001-44"
+    assert response.headers["Location"] == f"/tenants/{tenants[0].id}"
+
+
+def test_converter_lead_em_cliente_registra_auditoria(app, monkeypatch, campaigns_db_path, fiscal_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    lead = campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X")
+
+    app.test_client().post(
+        f"/admin/campanhas/leads/{lead.id}/converter-em-cliente",
+        headers=_basic_auth_header("admin", "senha-secreta"),
+    )
+
+    fiscal_conn = fiscal_storage.connect(fiscal_db_path)
+    eventos = fiscal_storage.list_auditoria(fiscal_conn)
+    assert len(eventos) == 1
+    assert eventos[0].acao == "lead_convertido_em_cliente"
+    assert eventos[0].entidade == "tenant"
+
+
+def test_converter_lead_em_cliente_404_quando_lead_nao_existe(app, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    response = app.test_client().post(
+        "/admin/campanhas/leads/999/converter-em-cliente", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+    assert response.status_code == 404
 
 
 def test_status_sistema_links_to_rodar_campanha_agora(app, monkeypatch):

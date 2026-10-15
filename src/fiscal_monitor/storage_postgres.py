@@ -18,7 +18,18 @@ from datetime import datetime, timezone
 import psycopg2
 import psycopg2.extras
 
-from src.fiscal_monitor.models import AdminUser, Certidao, Cnpj, Finding, Obrigacao, Tenant
+from src.fiscal_monitor.models import (
+    AdminUser,
+    AuditoriaEvento,
+    Certidao,
+    Cnpj,
+    Documento,
+    Finding,
+    Honorario,
+    Obrigacao,
+    OportunidadeCredito,
+    Tenant,
+)
 
 DEFAULT_DB_PATH = "output/fiscal_monitor.db"  # não usado neste backend; mantido por simetria de assinatura
 
@@ -113,6 +124,46 @@ CREATE TABLE IF NOT EXISTS pgfn_dividas_abertas (
     importado_em TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS pgfn_dividas_abertas_cnpj_idx ON pgfn_dividas_abertas(cnpj);
+
+CREATE TABLE IF NOT EXISTS documentos (
+    id SERIAL PRIMARY KEY,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    tipo TEXT NOT NULL,
+    nome_arquivo TEXT NOT NULL,
+    arquivo_conteudo BYTEA NOT NULL,
+    criado_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oportunidades_credito (
+    id SERIAL PRIMARY KEY,
+    cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
+    tipo TEXT NOT NULL,
+    descricao TEXT NOT NULL,
+    valor_estimado DOUBLE PRECISION,
+    status TEXT NOT NULL DEFAULT 'identificada',
+    evidencia TEXT,
+    criado_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS honorarios (
+    id SERIAL PRIMARY KEY,
+    tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+    competencia TEXT NOT NULL,
+    valor DOUBLE PRECISION NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pendente',
+    vencimento TEXT NOT NULL,
+    criado_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auditoria_eventos (
+    id SERIAL PRIMARY KEY,
+    quem TEXT NOT NULL,
+    acao TEXT NOT NULL,
+    entidade TEXT NOT NULL,
+    entidade_id INTEGER,
+    detalhes TEXT,
+    criado_em TEXT NOT NULL
+);
 """
 
 _CONNECTION_ENV_VARS = ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_URL_NON_POOLING")
@@ -596,3 +647,181 @@ def count_dividas_abertas_pgfn(conn) -> int:
     with conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) AS n FROM pgfn_dividas_abertas")
         return cur.fetchone()["n"]
+
+
+def create_documento(conn, cnpj_id: int, tipo: str, nome_arquivo: str, arquivo_conteudo: bytes) -> Documento:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO documentos (cnpj_id, tipo, nome_arquivo, arquivo_conteudo, criado_em)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id
+            """,
+            (cnpj_id, tipo, nome_arquivo, psycopg2.Binary(arquivo_conteudo), criado_em),
+        )
+        documento_id = cur.fetchone()["id"]
+    conn.commit()
+    return Documento(id=documento_id, cnpj_id=cnpj_id, tipo=tipo, nome_arquivo=nome_arquivo, criado_em=criado_em)
+
+
+def list_documentos(conn, cnpj_id: int) -> list[Documento]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, cnpj_id, tipo, nome_arquivo, criado_em FROM documentos WHERE cnpj_id = %s ORDER BY id DESC",
+            (cnpj_id,),
+        )
+        rows = cur.fetchall()
+    return [_row_to_documento(row) for row in rows]
+
+
+def get_documento(conn, documento_id: int) -> Documento | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, cnpj_id, tipo, nome_arquivo, criado_em FROM documentos WHERE id = %s", (documento_id,)
+        )
+        row = cur.fetchone()
+    return _row_to_documento(row) if row else None
+
+
+def get_documento_arquivo(conn, documento_id: int) -> bytes | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT arquivo_conteudo FROM documentos WHERE id = %s", (documento_id,))
+        row = cur.fetchone()
+    return bytes(row["arquivo_conteudo"]) if row else None
+
+
+def _row_to_documento(row) -> Documento:
+    return Documento(
+        id=row["id"], cnpj_id=row["cnpj_id"], tipo=row["tipo"], nome_arquivo=row["nome_arquivo"],
+        criado_em=row["criado_em"],
+    )
+
+
+def create_oportunidade_credito(
+    conn, cnpj_id: int, tipo: str, descricao: str, valor_estimado: float | None = None,
+    evidencia: str | None = None,
+) -> OportunidadeCredito:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO oportunidades_credito (cnpj_id, tipo, descricao, valor_estimado, status, evidencia, criado_em)
+            VALUES (%s, %s, %s, %s, 'identificada', %s, %s) RETURNING id
+            """,
+            (cnpj_id, tipo, descricao, valor_estimado, evidencia, criado_em),
+        )
+        oportunidade_id = cur.fetchone()["id"]
+    conn.commit()
+    return OportunidadeCredito(
+        id=oportunidade_id, cnpj_id=cnpj_id, tipo=tipo, descricao=descricao, valor_estimado=valor_estimado,
+        status="identificada", evidencia=evidencia, criado_em=criado_em,
+    )
+
+
+def list_oportunidades_credito(conn, cnpj_id: int) -> list[OportunidadeCredito]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM oportunidades_credito WHERE cnpj_id = %s ORDER BY id DESC", (cnpj_id,))
+        rows = cur.fetchall()
+    return [_row_to_oportunidade_credito(row) for row in rows]
+
+
+def set_oportunidade_credito_status(conn, oportunidade_id: int, status: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE oportunidades_credito SET status = %s WHERE id = %s", (status, oportunidade_id))
+    conn.commit()
+
+
+def _row_to_oportunidade_credito(row) -> OportunidadeCredito:
+    return OportunidadeCredito(
+        id=row["id"], cnpj_id=row["cnpj_id"], tipo=row["tipo"], descricao=row["descricao"],
+        valor_estimado=row["valor_estimado"], status=row["status"], evidencia=row["evidencia"],
+        criado_em=row["criado_em"],
+    )
+
+
+def create_honorario(conn, tenant_id: int, competencia: str, valor: float, vencimento: str) -> Honorario:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO honorarios (tenant_id, competencia, valor, status, vencimento, criado_em)
+            VALUES (%s, %s, %s, 'pendente', %s, %s) RETURNING id
+            """,
+            (tenant_id, competencia, valor, vencimento, criado_em),
+        )
+        honorario_id = cur.fetchone()["id"]
+    conn.commit()
+    return Honorario(
+        id=honorario_id, tenant_id=tenant_id, competencia=competencia, valor=valor, status="pendente",
+        vencimento=vencimento, criado_em=criado_em,
+    )
+
+
+def list_honorarios(conn, tenant_id: int) -> list[Honorario]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM honorarios WHERE tenant_id = %s ORDER BY competencia DESC", (tenant_id,))
+        rows = cur.fetchall()
+    return [_row_to_honorario(row) for row in rows]
+
+
+def set_honorario_status(conn, honorario_id: int, status: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE honorarios SET status = %s WHERE id = %s", (status, honorario_id))
+    conn.commit()
+
+
+def honorarios_pendentes_resumo(conn) -> dict:
+    """Agregado pra `/admin/status` — total pendente/atrasado em todos os
+    tenants, numa consulta só (sem loop por tenant)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN status = 'pendente' THEN valor ELSE 0 END), 0) AS total_pendente,
+                COALESCE(SUM(CASE WHEN status = 'atrasado' THEN valor ELSE 0 END), 0) AS total_atrasado,
+                COALESCE(SUM(CASE WHEN status = 'pendente' THEN 1 ELSE 0 END), 0) AS qtd_pendente,
+                COALESCE(SUM(CASE WHEN status = 'atrasado' THEN 1 ELSE 0 END), 0) AS qtd_atrasado
+            FROM honorarios
+            """
+        )
+        row = cur.fetchone()
+    return {
+        "total_pendente": row["total_pendente"],
+        "total_atrasado": row["total_atrasado"],
+        "qtd_pendente": row["qtd_pendente"],
+        "qtd_atrasado": row["qtd_atrasado"],
+    }
+
+
+def _row_to_honorario(row) -> Honorario:
+    return Honorario(
+        id=row["id"], tenant_id=row["tenant_id"], competencia=row["competencia"], valor=row["valor"],
+        status=row["status"], vencimento=row["vencimento"], criado_em=row["criado_em"],
+    )
+
+
+def registrar_auditoria(
+    conn, quem: str, acao: str, entidade: str, entidade_id: int | None = None, detalhes: str | None = None,
+) -> None:
+    criado_em = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO auditoria_eventos (quem, acao, entidade, entidade_id, detalhes, criado_em) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (quem, acao, entidade, entidade_id, detalhes, criado_em),
+        )
+    conn.commit()
+
+
+def list_auditoria(conn, limite: int = 200) -> list[AuditoriaEvento]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM auditoria_eventos ORDER BY id DESC LIMIT %s", (limite,))
+        rows = cur.fetchall()
+    return [_row_to_auditoria(row) for row in rows]
+
+
+def _row_to_auditoria(row) -> AuditoriaEvento:
+    return AuditoriaEvento(
+        id=row["id"], quem=row["quem"], acao=row["acao"], entidade=row["entidade"],
+        entidade_id=row["entidade_id"], detalhes=row["detalhes"], criado_em=row["criado_em"],
+    )

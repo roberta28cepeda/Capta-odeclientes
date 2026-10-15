@@ -820,6 +820,23 @@ def test_tenant_detail_shows_risk_score(app):
     assert b"Baixo" in response.data  # sem obrigação/certidão cadastrada, risco baixo
 
 
+def test_tenant_detail_shows_documentos_oportunidades_e_honorarios(app, db_path):
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    cnpj_id = app.config["_cnpj_id"]
+    storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    storage.create_oportunidade_credito(conn, cnpj_id, "icms_st", "Credito de ICMS/ST identificado")
+    storage.create_honorario(conn, tenant_id, "2026-10", 1500.0, "2026-11-05")
+    conn.close()
+
+    response = app.test_client().get(_tenant_url(app))
+
+    assert response.status_code == 200
+    assert b"contrato.pdf" in response.data
+    assert b"Credito de ICMS/ST identificado" in response.data
+    assert b"2026-10" in response.data
+
+
 def test_obrigacoes_requires_tenant_auth(app):
     tenant_id = app.config["_tenant_id"]
     cnpj_id = app.config["_cnpj_id"]
@@ -901,6 +918,232 @@ def test_baixar_certidao_returns_pdf(app, db_path):
     assert response.status_code == 200
     assert response.mimetype == "application/pdf"
     assert response.data == b"%PDF-1.4 conteudo"
+
+
+def test_documentos_requires_tenant_auth(app):
+    tenant_id = app.config["_tenant_id"]
+    cnpj_id = app.config["_cnpj_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/documentos")
+    assert response.status_code == 403
+
+
+def test_documentos_post_uploads_and_lists(app, db_path):
+    response = app.test_client().post(
+        _cnpj_url(app, "/documentos"),
+        data={"tipo": "contrato", "arquivo": (io.BytesIO(b"conteudo-fake"), "contrato.pdf")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    assert b"contrato.pdf" in response.data
+
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documentos = storage.list_documentos(conn, cnpj_id)
+    assert len(documentos) == 1
+    assert documentos[0].tipo == "contrato"
+
+
+def test_documentos_post_registra_auditoria(app, db_path):
+    app.test_client().post(
+        _cnpj_url(app, "/documentos"),
+        data={"tipo": "procuracao", "arquivo": (io.BytesIO(b"conteudo-fake"), "procuracao.pdf")},
+        content_type="multipart/form-data",
+    )
+
+    conn = storage.connect(db_path)
+    eventos = storage.list_auditoria(conn)
+    assert len(eventos) == 1
+    assert eventos[0].acao == "documento_enviado"
+    assert eventos[0].entidade == "documento"
+
+
+def test_baixar_documento_returns_arquivo(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    conn.close()
+
+    response = app.test_client().get(_cnpj_url(app, f"/documentos/{documento.id}/baixar"))
+
+    assert response.status_code == 200
+    assert response.data == b"conteudo-fake"
+
+
+def test_baixar_documento_requires_tenant_auth(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    conn.close()
+    tenant_id = app.config["_tenant_id"]
+
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/documentos/{documento.id}/baixar")
+
+    assert response.status_code == 403
+
+
+def test_oportunidades_requires_tenant_auth(app):
+    tenant_id = app.config["_tenant_id"]
+    cnpj_id = app.config["_cnpj_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/oportunidades")
+    assert response.status_code == 403
+
+
+def test_oportunidades_post_creates_and_lists(app, db_path):
+    response = app.test_client().post(
+        _cnpj_url(app, "/oportunidades"),
+        data={
+            "tipo": "icms_st",
+            "descricao": "Credito de ICMS/ST identificado em notas de 2024",
+            "valor_estimado": "12345.67",
+            "evidencia": "planilha de apuracao",
+        },
+    )
+    assert response.status_code == 200
+    assert b"Credito de ICMS/ST identificado em notas de 2024" in response.data
+
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    oportunidades = storage.list_oportunidades_credito(conn, cnpj_id)
+    assert len(oportunidades) == 1
+    assert oportunidades[0].tipo == "icms_st"
+    assert oportunidades[0].valor_estimado == 12345.67
+    assert oportunidades[0].status == "identificada"
+
+
+def test_oportunidades_post_registra_auditoria(app, db_path):
+    app.test_client().post(
+        _cnpj_url(app, "/oportunidades"),
+        data={"tipo": "pis_cofins_nao_cumulativos", "descricao": "Crédito de PIS/Cofins não cumulativos"},
+    )
+
+    conn = storage.connect(db_path)
+    eventos = storage.list_auditoria(conn)
+    assert len(eventos) == 1
+    assert eventos[0].acao == "oportunidade_credito_registrada"
+    assert eventos[0].entidade == "oportunidade_credito"
+
+
+def test_mudar_status_oportunidade_requires_tenant_auth(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    oportunidade = storage.create_oportunidade_credito(conn, cnpj_id, "icms_st", "descrição teste")
+    conn.close()
+    tenant_id = app.config["_tenant_id"]
+
+    response = app.test_client().post(
+        f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/oportunidades/{oportunidade.id}/status", data={"status": "validada"}
+    )
+
+    assert response.status_code == 403
+
+
+def test_mudar_status_oportunidade_atualiza_e_redireciona(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    oportunidade = storage.create_oportunidade_credito(conn, cnpj_id, "icms_st", "descrição teste")
+    conn.close()
+
+    response = app.test_client().post(
+        _cnpj_url(app, f"/oportunidades/{oportunidade.id}/status"), data={"status": "validada"}
+    )
+
+    assert response.status_code == 302
+    conn = storage.connect(db_path)
+    atualizada = [o for o in storage.list_oportunidades_credito(conn, cnpj_id) if o.id == oportunidade.id][0]
+    assert atualizada.status == "validada"
+
+
+def test_financeiro_requires_tenant_auth(app):
+    tenant_id = app.config["_tenant_id"]
+    response = app.test_client().get(f"/tenants/{tenant_id}/financeiro")
+    assert response.status_code == 403
+
+
+def test_financeiro_post_creates_and_lists(app, db_path):
+    response = app.test_client().post(
+        _tenant_url(app, "/financeiro"),
+        data={"competencia": "2026-10", "valor": "1500.00", "vencimento": "2026-11-05"},
+    )
+    assert response.status_code == 200
+    assert b"2026-10" in response.data
+
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    honorarios = storage.list_honorarios(conn, tenant_id)
+    assert len(honorarios) == 1
+    assert honorarios[0].valor == 1500.00
+    assert honorarios[0].status == "pendente"
+
+
+def test_financeiro_post_registra_auditoria(app, db_path):
+    app.test_client().post(
+        _tenant_url(app, "/financeiro"),
+        data={"competencia": "2026-10", "valor": "1500.00", "vencimento": "2026-11-05"},
+    )
+
+    conn = storage.connect(db_path)
+    eventos = storage.list_auditoria(conn)
+    assert len(eventos) == 1
+    assert eventos[0].acao == "honorario_lancado"
+    assert eventos[0].entidade == "honorario"
+
+
+def test_mudar_status_honorario_requires_tenant_auth(app, db_path):
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    conn.close()
+
+    response = app.test_client().post(f"/tenants/{tenant_id}/financeiro/{honorario.id}/status", data={"status": "pago"})
+
+    assert response.status_code == 403
+
+
+def test_mudar_status_honorario_atualiza_e_redireciona(app, db_path):
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    conn.close()
+
+    response = app.test_client().post(_tenant_url(app, f"/financeiro/{honorario.id}/status"), data={"status": "pago"})
+
+    assert response.status_code == 302
+    conn = storage.connect(db_path)
+    atualizado = [h for h in storage.list_honorarios(conn, tenant_id) if h.id == honorario.id][0]
+    assert atualizado.status == "pago"
+
+
+def test_auditoria_requires_admin(app):
+    response = app.test_client().get("/admin/auditoria")
+    assert response.status_code == 401
+
+
+def test_auditoria_lista_eventos(app, db_path, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = storage.connect(db_path)
+    storage.registrar_auditoria(conn, "admin", "documento_enviado", "documento", 1, "cnpj_id=1 tipo=contrato")
+    conn.close()
+
+    response = app.test_client().get("/admin/auditoria", headers=_basic_auth_header("admin", "senha-secreta"))
+
+    assert response.status_code == 200
+    assert b"documento_enviado" in response.data
+
+
+def test_auditoria_filtra_por_entidade(app, db_path, monkeypatch):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = storage.connect(db_path)
+    storage.registrar_auditoria(conn, "admin", "documento_enviado", "documento", 1)
+    storage.registrar_auditoria(conn, "admin", "honorario_lancado", "honorario", 1)
+    conn.close()
+
+    response = app.test_client().get(
+        "/admin/auditoria?entidade=honorario", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+
+    assert response.status_code == 200
+    assert b"honorario_lancado" in response.data
+    assert b"documento_enviado" not in response.data
 
 
 def _pdf_valido_minimo() -> bytes:

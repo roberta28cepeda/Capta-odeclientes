@@ -11,7 +11,7 @@ from src.fiscal_monitor.infosimples import (
 )
 from src.fiscal_monitor.pdf import render_dossie_fiscal_pdf, render_pre_analise_pdf, render_portfolio_report
 from src.fiscal_monitor.preanalise import PreAnalise
-from src.fiscal_monitor.storage import Cnpj, Finding, Tenant
+from src.fiscal_monitor.storage import Cnpj, Finding, OportunidadeCredito, Tenant
 
 TENANT = Tenant(id=1, nome="Escritório A", contato_whatsapp=None, plano=None, criado_em="")
 CNPJ_COM_ACHADO = Cnpj(id=1, tenant_id=1, cnpj="11.222.333/0001-44", razao_social="Contábil Exemplo", nome_fantasia=None, ativo=True)
@@ -170,6 +170,26 @@ def test_render_dossie_fiscal_pdf_with_alertas_and_divida_ativa():
             ["Inscrito na Lista de Devedores da PGFN."],
             path,
             divida_ativa=divida_ativa,
+        )
+
+        assert os.path.exists(path)
+        assert os.path.getsize(path) > 0
+        with open(path, "rb") as f:
+            assert f.read(4) == b"%PDF"
+
+
+def test_render_dossie_fiscal_pdf_with_oportunidades_credito():
+    oportunidades = [
+        OportunidadeCredito(
+            id=1, cnpj_id=1, tipo="icms_st", descricao="Crédito de ICMS/ST identificado em 2024",
+            valor_estimado=12345.67, status="em_analise", evidencia=None, criado_em="",
+        )
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "dossie_fiscal_oportunidades.pdf")
+        render_dossie_fiscal_pdf(
+            CNPJ_COM_ACHADO, TENANT, [], path, oportunidades_credito=oportunidades,
         )
 
         assert os.path.exists(path)

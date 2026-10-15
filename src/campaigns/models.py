@@ -24,6 +24,13 @@ TIPOS_ENVIO = [TIPO_INICIAL, *TIPOS_FOLLOWUP]
 
 DIAS_ENTRE_FOLLOWUPS = 5
 
+# Estágio do funil de captação — separado de `status` (que é
+# ativo/pausado/invalido, sobre a campanha de e-mail em si). `estagio` é
+# sobre onde o lead está na negociação; só avança por ação manual de
+# quem está prospectando.
+ESTAGIOS_LEAD = ["novo", "qualificado", "proposta_enviada", "fechado", "perdido"]
+ESTAGIO_PADRAO = "novo"
+
 # Total de e-mails (inicial + follow-up somados) que uma tese pode mandar
 # por dia — mesmo limite que o Apps Script já usava, pra não estourar
 # reputação de envio nem parecer disparo em massa.
@@ -42,6 +49,7 @@ class Lead:
     valor_divida: float | None = None
     telefone: str | None = None
     whatsapp_contatado_em: str | None = None
+    estagio: str = ESTAGIO_PADRAO
 
 
 @dataclass
