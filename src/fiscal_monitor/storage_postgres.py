@@ -23,11 +23,14 @@ from src.fiscal_monitor.models import (
     AuditoriaEvento,
     Certidao,
     Cnpj,
+    CobrancaAsaas,
     Documento,
     Finding,
     Honorario,
     Obrigacao,
     OportunidadeCredito,
+    PAPEL_PADRAO,
+    SolicitacaoAssinatura,
     Tenant,
 )
 
@@ -41,7 +44,8 @@ CREATE TABLE IF NOT EXISTS tenants (
     plano TEXT,
     criado_em TEXT NOT NULL,
     acesso_token TEXT NOT NULL DEFAULT '',
-    contato_email TEXT
+    contato_email TEXT,
+    cnpj TEXT
 );
 
 CREATE TABLE IF NOT EXISTS cnpjs (
@@ -88,7 +92,8 @@ CREATE TABLE IF NOT EXISTS admin_users (
     password_hash TEXT NOT NULL,
     nome TEXT,
     criado_em TEXT NOT NULL,
-    ativo BOOLEAN NOT NULL DEFAULT true
+    ativo BOOLEAN NOT NULL DEFAULT true,
+    papel TEXT NOT NULL DEFAULT 'operador'
 );
 
 CREATE TABLE IF NOT EXISTS obrigacoes (
@@ -134,6 +139,18 @@ CREATE TABLE IF NOT EXISTS documentos (
     criado_em TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS solicitacoes_assinatura (
+    id SERIAL PRIMARY KEY,
+    documento_id INTEGER NOT NULL REFERENCES documentos(id),
+    provider_envelope_id TEXT NOT NULL,
+    signatario_nome TEXT NOT NULL,
+    signatario_email TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'enviado',
+    documento_assinado_id INTEGER REFERENCES documentos(id),
+    criado_em TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS oportunidades_credito (
     id SERIAL PRIMARY KEY,
     cnpj_id INTEGER NOT NULL REFERENCES cnpjs(id),
@@ -153,6 +170,17 @@ CREATE TABLE IF NOT EXISTS honorarios (
     status TEXT NOT NULL DEFAULT 'pendente',
     vencimento TEXT NOT NULL,
     criado_em TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cobrancas_asaas (
+    id SERIAL PRIMARY KEY,
+    honorario_id INTEGER NOT NULL UNIQUE REFERENCES honorarios(id),
+    asaas_customer_id TEXT NOT NULL,
+    asaas_payment_id TEXT NOT NULL,
+    invoice_url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pendente',
+    criado_em TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS auditoria_eventos (
@@ -195,6 +223,8 @@ def connect(db_path: str | None = None) -> psycopg2.extensions.connection:
             cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS acesso_token TEXT NOT NULL DEFAULT ''")
             cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS contato_email TEXT")
             cur.execute("ALTER TABLE cnpjs ADD COLUMN IF NOT EXISTS uf TEXT")
+            cur.execute("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS papel TEXT NOT NULL DEFAULT 'operador'")
+            cur.execute("ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cnpj TEXT")
             cur.execute(
                 "UPDATE tenants SET acesso_token = md5(random()::text || id::text) WHERE acesso_token = ''"
             )
@@ -209,16 +239,17 @@ def create_tenant(
     contato_whatsapp: str | None = None,
     plano: str | None = None,
     contato_email: str | None = None,
+    cnpj: str | None = None,
 ) -> Tenant:
     criado_em = datetime.now(timezone.utc).isoformat()
     acesso_token = secrets.token_urlsafe(24)
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            INSERT INTO tenants (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email, cnpj)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
             """,
-            (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email),
+            (nome, contato_whatsapp, plano, criado_em, acesso_token, contato_email, cnpj),
         )
         tenant_id = cur.fetchone()["id"]
     conn.commit()
@@ -230,6 +261,7 @@ def create_tenant(
         criado_em=criado_em,
         acesso_token=acesso_token,
         contato_email=contato_email,
+        cnpj=cnpj,
     )
 
 
@@ -247,6 +279,12 @@ def list_tenants(conn) -> list[Tenant]:
     return [_row_to_tenant(row) for row in rows]
 
 
+def set_tenant_cnpj(conn, tenant_id: int, cnpj: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE tenants SET cnpj = %s WHERE id = %s", (cnpj, tenant_id))
+    conn.commit()
+
+
 def _row_to_tenant(row) -> Tenant:
     return Tenant(
         id=row["id"],
@@ -256,6 +294,7 @@ def _row_to_tenant(row) -> Tenant:
         criado_em=row["criado_em"],
         acesso_token=row["acesso_token"],
         contato_email=row["contato_email"],
+        cnpj=row.get("cnpj"),
     )
 
 
@@ -449,16 +488,22 @@ def findings_by_cnpj_for_tenant(conn, tenant_id: int) -> list[tuple[Cnpj, list[F
     return result
 
 
-def create_admin_user(conn, username: str, password_hash: str, nome: str | None = None) -> AdminUser:
+def create_admin_user(
+    conn, username: str, password_hash: str, nome: str | None = None, papel: str = PAPEL_PADRAO
+) -> AdminUser:
     criado_em = datetime.now(timezone.utc).isoformat()
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO admin_users (username, password_hash, nome, criado_em, ativo) VALUES (%s, %s, %s, %s, true) RETURNING id",
-            (username, password_hash, nome, criado_em),
+            "INSERT INTO admin_users (username, password_hash, nome, criado_em, ativo, papel) "
+            "VALUES (%s, %s, %s, %s, true, %s) RETURNING id",
+            (username, password_hash, nome, criado_em, papel),
         )
         new_id = cur.fetchone()["id"]
     conn.commit()
-    return AdminUser(id=new_id, username=username, password_hash=password_hash, nome=nome, criado_em=criado_em, ativo=True)
+    return AdminUser(
+        id=new_id, username=username, password_hash=password_hash, nome=nome, criado_em=criado_em, ativo=True,
+        papel=papel,
+    )
 
 
 def get_admin_user_by_username(conn, username: str) -> AdminUser | None:
@@ -481,6 +526,12 @@ def set_admin_user_ativo(conn, user_id: int, ativo: bool) -> None:
     conn.commit()
 
 
+def set_admin_user_papel(conn, user_id: int, papel: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE admin_users SET papel = %s WHERE id = %s", (papel, user_id))
+    conn.commit()
+
+
 def _row_to_admin_user(row) -> AdminUser:
     return AdminUser(
         id=row["id"],
@@ -489,6 +540,7 @@ def _row_to_admin_user(row) -> AdminUser:
         nome=row["nome"],
         criado_em=row["criado_em"],
         ativo=row["ativo"],
+        papel=row.get("papel") or PAPEL_PADRAO,
     )
 
 
@@ -697,6 +749,63 @@ def _row_to_documento(row) -> Documento:
     )
 
 
+def create_solicitacao_assinatura(
+    conn, documento_id: int, provider_envelope_id: str, signatario_nome: str, signatario_email: str
+) -> SolicitacaoAssinatura:
+    agora = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO solicitacoes_assinatura
+                (documento_id, provider_envelope_id, signatario_nome, signatario_email, status, criado_em, atualizado_em)
+            VALUES (%s, %s, %s, %s, 'enviado', %s, %s) RETURNING id
+            """,
+            (documento_id, provider_envelope_id, signatario_nome, signatario_email, agora, agora),
+        )
+        new_id = cur.fetchone()["id"]
+    conn.commit()
+    return SolicitacaoAssinatura(
+        id=new_id, documento_id=documento_id, provider_envelope_id=provider_envelope_id,
+        signatario_nome=signatario_nome, signatario_email=signatario_email, status="enviado",
+        documento_assinado_id=None, criado_em=agora, atualizado_em=agora,
+    )
+
+
+def list_solicitacoes_assinatura(conn, documento_id: int) -> list[SolicitacaoAssinatura]:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM solicitacoes_assinatura WHERE documento_id = %s ORDER BY id DESC", (documento_id,))
+        rows = cur.fetchall()
+    return [_row_to_solicitacao_assinatura(row) for row in rows]
+
+
+def get_solicitacao_assinatura_by_envelope(conn, provider_envelope_id: str) -> SolicitacaoAssinatura | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM solicitacoes_assinatura WHERE provider_envelope_id = %s", (provider_envelope_id,))
+        row = cur.fetchone()
+    return _row_to_solicitacao_assinatura(row) if row else None
+
+
+def set_solicitacao_assinatura_status(
+    conn, solicitacao_id: int, status: str, documento_assinado_id: int | None = None
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE solicitacoes_assinatura SET status = %s, documento_assinado_id = %s, atualizado_em = %s "
+            "WHERE id = %s",
+            (status, documento_assinado_id, datetime.now(timezone.utc).isoformat(), solicitacao_id),
+        )
+    conn.commit()
+
+
+def _row_to_solicitacao_assinatura(row) -> SolicitacaoAssinatura:
+    return SolicitacaoAssinatura(
+        id=row["id"], documento_id=row["documento_id"], provider_envelope_id=row["provider_envelope_id"],
+        signatario_nome=row["signatario_nome"], signatario_email=row["signatario_email"], status=row["status"],
+        documento_assinado_id=row["documento_assinado_id"], criado_em=row["criado_em"],
+        atualizado_em=row["atualizado_em"],
+    )
+
+
 def create_oportunidade_credito(
     conn, cnpj_id: int, tipo: str, descricao: str, valor_estimado: float | None = None,
     evidencia: str | None = None,
@@ -797,6 +906,59 @@ def _row_to_honorario(row) -> Honorario:
     return Honorario(
         id=row["id"], tenant_id=row["tenant_id"], competencia=row["competencia"], valor=row["valor"],
         status=row["status"], vencimento=row["vencimento"], criado_em=row["criado_em"],
+    )
+
+
+def create_cobranca_asaas(
+    conn, honorario_id: int, asaas_customer_id: str, asaas_payment_id: str, invoice_url: str,
+) -> CobrancaAsaas:
+    agora = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO cobrancas_asaas
+                (honorario_id, asaas_customer_id, asaas_payment_id, invoice_url, status, criado_em, atualizado_em)
+            VALUES (%s, %s, %s, %s, 'pendente', %s, %s) RETURNING id
+            """,
+            (honorario_id, asaas_customer_id, asaas_payment_id, invoice_url, agora, agora),
+        )
+        new_id = cur.fetchone()["id"]
+    conn.commit()
+    return CobrancaAsaas(
+        id=new_id, honorario_id=honorario_id, asaas_customer_id=asaas_customer_id,
+        asaas_payment_id=asaas_payment_id, invoice_url=invoice_url, status="pendente",
+        criado_em=agora, atualizado_em=agora,
+    )
+
+
+def get_cobranca_asaas_by_honorario(conn, honorario_id: int) -> CobrancaAsaas | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM cobrancas_asaas WHERE honorario_id = %s", (honorario_id,))
+        row = cur.fetchone()
+    return _row_to_cobranca_asaas(row) if row else None
+
+
+def get_cobranca_asaas_by_payment_id(conn, asaas_payment_id: str) -> CobrancaAsaas | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM cobrancas_asaas WHERE asaas_payment_id = %s", (asaas_payment_id,))
+        row = cur.fetchone()
+    return _row_to_cobranca_asaas(row) if row else None
+
+
+def set_cobranca_asaas_status(conn, cobranca_id: int, status: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE cobrancas_asaas SET status = %s, atualizado_em = %s WHERE id = %s",
+            (status, datetime.now(timezone.utc).isoformat(), cobranca_id),
+        )
+    conn.commit()
+
+
+def _row_to_cobranca_asaas(row) -> CobrancaAsaas:
+    return CobrancaAsaas(
+        id=row["id"], honorario_id=row["honorario_id"], asaas_customer_id=row["asaas_customer_id"],
+        asaas_payment_id=row["asaas_payment_id"], invoice_url=row["invoice_url"], status=row["status"],
+        criado_em=row["criado_em"], atualizado_em=row["atualizado_em"],
     )
 
 

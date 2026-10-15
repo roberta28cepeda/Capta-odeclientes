@@ -8,6 +8,8 @@ import pytest
 from werkzeug.security import generate_password_hash
 
 from src.fiscal_monitor import storage
+from src.fiscal_monitor.asaas import CobrancaError
+from src.fiscal_monitor.clicksign import AssinaturaError
 from src.fiscal_monitor.infosimples import ConsultaDebitosError
 from src.fiscal_monitor.preanalise import CartaoCnpjError, ConsultaCnpjError
 from src.fiscal_monitor.server import create_app
@@ -807,6 +809,112 @@ def test_alternar_ativo_usuario_toggles_status(app, monkeypatch, db_path):
     assert storage.get_admin_user_by_username(conn, "maria").ativo is False
 
 
+def test_tenants_lista_permite_papel_leitor(app, db_path):
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), papel="leitor")
+    conn.close()
+
+    response = app.test_client().get("/tenants", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 200
+
+
+def test_admin_tenants_novo_bloqueia_papel_operador(app, db_path):
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), papel="operador")
+    conn.close()
+
+    response = app.test_client().get("/admin/tenants/novo", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 403
+
+
+def test_admin_tenants_novo_permite_papel_gestor(app, db_path):
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), papel="gestor")
+    conn.close()
+
+    response = app.test_client().get("/admin/tenants/novo", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 200
+
+
+def test_admin_usuarios_bloqueia_papel_leitor(app, db_path):
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), papel="leitor")
+    conn.close()
+
+    response = app.test_client().get("/admin/usuarios", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 403
+
+
+def test_pre_analise_bloqueia_papel_leitor(app, db_path):
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), papel="leitor")
+    conn.close()
+
+    response = app.test_client().get("/pre-analise", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 403
+
+
+def test_pre_analise_permite_papel_operador(app, db_path):
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), papel="operador")
+    conn.close()
+
+    response = app.test_client().get("/pre-analise", headers=_basic_auth_header("maria", "senha-da-maria"))
+
+    assert response.status_code == 200
+
+
+def test_alterar_papel_usuario_requires_papel_gestor(app, db_path):
+    conn = storage.connect(db_path)
+    storage.create_admin_user(conn, "maria", generate_password_hash("senha-da-maria"), papel="operador")
+    alvo = storage.create_admin_user(conn, "joao", generate_password_hash("senha-do-joao"), papel="operador")
+    conn.close()
+
+    response = app.test_client().post(
+        f"/admin/usuarios/{alvo.id}/papel", data={"papel": "gestor"},
+        headers=_basic_auth_header("maria", "senha-da-maria"),
+    )
+
+    assert response.status_code == 403
+
+
+def test_alterar_papel_usuario_atualiza_e_audita(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    alvo = storage.create_admin_user(conn, "joao", generate_password_hash("senha-do-joao"), papel="operador")
+    conn.close()
+
+    response = app.test_client().post(
+        f"/admin/usuarios/{alvo.id}/papel", data={"papel": "gestor"},
+        headers=_basic_auth_header("admin", "senha-mestre"),
+    )
+
+    assert response.status_code == 200
+    conn = storage.connect(db_path)
+    assert storage.get_admin_user_by_username(conn, "joao").papel == "gestor"
+    eventos = storage.list_auditoria(conn)
+    assert any(e.acao == "usuario_papel_alterado" for e in eventos)
+
+
+def test_alterar_papel_usuario_rejeita_papel_invalido(app, monkeypatch, db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-mestre")
+    conn = storage.connect(db_path)
+    alvo = storage.create_admin_user(conn, "joao", generate_password_hash("senha-do-joao"), papel="operador")
+    conn.close()
+
+    response = app.test_client().post(
+        f"/admin/usuarios/{alvo.id}/papel", data={"papel": "chefe-supremo"},
+        headers=_basic_auth_header("admin", "senha-mestre"),
+    )
+
+    assert response.status_code == 400
+
+
 def _cnpj_url(app, path: str = "") -> str:
     tenant_id = app.config["_tenant_id"]
     cnpj_id = app.config["_cnpj_id"]
@@ -981,6 +1089,131 @@ def test_baixar_documento_requires_tenant_auth(app, db_path):
     assert response.status_code == 403
 
 
+def test_solicitar_assinatura_requires_tenant_auth(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    conn.close()
+    tenant_id = app.config["_tenant_id"]
+
+    response = app.test_client().post(
+        f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/documentos/{documento.id}/solicitar-assinatura"
+    )
+
+    assert response.status_code == 403
+
+
+def test_solicitar_assinatura_requires_clicksign_token(app, db_path):
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    conn.close()
+
+    response = app.test_client().post(
+        _cnpj_url(app, f"/documentos/{documento.id}/solicitar-assinatura"),
+        data={"signatario_nome": "Fulano", "signatario_email": "fulano@exemplo.com"},
+    )
+
+    assert response.status_code == 400
+    assert b"CLICKSIGN_API_TOKEN" in response.data
+
+
+def test_solicitar_assinatura_rejeita_tipo_nao_assinavel(app, db_path, monkeypatch):
+    monkeypatch.setenv("CLICKSIGN_API_TOKEN", "TOKEN123")
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "xml", "nota.xml", b"conteudo-fake")
+    conn.close()
+
+    response = app.test_client().post(
+        _cnpj_url(app, f"/documentos/{documento.id}/solicitar-assinatura"),
+        data={"signatario_nome": "Fulano", "signatario_email": "fulano@exemplo.com"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_solicitar_assinatura_cria_solicitacao_e_audita(app, db_path, monkeypatch):
+    monkeypatch.setenv("CLICKSIGN_API_TOKEN", "TOKEN123")
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    conn.close()
+
+    with patch("src.fiscal_monitor.server.criar_solicitacao", return_value={"envelope_id": "env-123"}) as mock_criar:
+        response = app.test_client().post(
+            _cnpj_url(app, f"/documentos/{documento.id}/solicitar-assinatura"),
+            data={"signatario_nome": "Fulano", "signatario_email": "fulano@exemplo.com"},
+        )
+
+    assert response.status_code == 302
+    mock_criar.assert_called_once()
+    conn = storage.connect(db_path)
+    solicitacoes = storage.list_solicitacoes_assinatura(conn, documento.id)
+    assert len(solicitacoes) == 1
+    assert solicitacoes[0].provider_envelope_id == "env-123"
+    eventos = storage.list_auditoria(conn)
+    assert any(e.acao == "assinatura_solicitada" for e in eventos)
+
+
+def test_solicitar_assinatura_retorna_502_em_erro_do_provedor(app, db_path, monkeypatch):
+    monkeypatch.setenv("CLICKSIGN_API_TOKEN", "TOKEN123")
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    conn.close()
+
+    with patch("src.fiscal_monitor.server.criar_solicitacao", side_effect=AssinaturaError("token inválido")):
+        response = app.test_client().post(
+            _cnpj_url(app, f"/documentos/{documento.id}/solicitar-assinatura"),
+            data={"signatario_nome": "Fulano", "signatario_email": "fulano@exemplo.com"},
+        )
+
+    assert response.status_code == 502
+
+
+def test_webhook_clicksign_ignora_sem_segredo_configurado(app):
+    response = app.test_client().post("/webhooks/clicksign", json={"envelope_id": "env-123", "event": "sign"})
+    assert response.status_code == 200
+
+
+def test_webhook_clicksign_ignora_segredo_errado(app, monkeypatch):
+    monkeypatch.setenv("CLICKSIGN_WEBHOOK_SECRET", "segredo-certo")
+    response = app.test_client().post(
+        "/webhooks/clicksign",
+        json={"envelope_id": "env-123", "event": "sign"},
+        headers={"X-Clicksign-Secret": "segredo-errado"},
+    )
+    assert response.status_code == 200
+
+
+def test_webhook_clicksign_atualiza_status_e_cria_documento_assinado(app, db_path, monkeypatch):
+    monkeypatch.setenv("CLICKSIGN_WEBHOOK_SECRET", "segredo-certo")
+    monkeypatch.setenv("CLICKSIGN_API_TOKEN", "TOKEN123")
+    conn = storage.connect(db_path)
+    cnpj_id = app.config["_cnpj_id"]
+    documento = storage.create_documento(conn, cnpj_id, "contrato", "contrato.pdf", b"conteudo-fake")
+    solicitacao = storage.create_solicitacao_assinatura(conn, documento.id, "env-123", "Fulano", "fulano@exemplo.com")
+    conn.close()
+
+    with patch("src.fiscal_monitor.server.baixar_documento_assinado", return_value=b"pdf-assinado-fake"):
+        response = app.test_client().post(
+            "/webhooks/clicksign",
+            json={"envelope_id": "env-123", "event": "sign"},
+            headers={"X-Clicksign-Secret": "segredo-certo"},
+        )
+
+    assert response.status_code == 200
+    conn = storage.connect(db_path)
+    atualizada = storage.get_solicitacao_assinatura_by_envelope(conn, "env-123")
+    assert atualizada.status == "assinado"
+    assert atualizada.documento_assinado_id is not None
+    doc_assinado = storage.get_documento(conn, atualizada.documento_assinado_id)
+    assert storage.get_documento_arquivo(conn, doc_assinado.id) == b"pdf-assinado-fake"
+    eventos = storage.list_auditoria(conn)
+    assert any(e.acao == "assinatura_status_alterado" for e in eventos)
+
+
 def test_oportunidades_requires_tenant_auth(app):
     tenant_id = app.config["_tenant_id"]
     cnpj_id = app.config["_cnpj_id"]
@@ -1111,6 +1344,153 @@ def test_mudar_status_honorario_atualiza_e_redireciona(app, db_path):
     conn = storage.connect(db_path)
     atualizado = [h for h in storage.list_honorarios(conn, tenant_id) if h.id == honorario.id][0]
     assert atualizado.status == "pago"
+
+
+def test_definir_cnpj_tenant_requires_tenant_auth(app):
+    tenant_id = app.config["_tenant_id"]
+    response = app.test_client().post(f"/tenants/{tenant_id}/cnpj", data={"cnpj": "11.222.333/0001-44"})
+    assert response.status_code == 403
+
+
+def test_definir_cnpj_tenant_atualiza_e_audita(app, db_path):
+    response = app.test_client().post(_tenant_url(app, "/cnpj"), data={"cnpj": "11.222.333/0001-44"})
+
+    assert response.status_code == 302
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    assert storage.get_tenant(conn, tenant_id).cnpj == "11.222.333/0001-44"
+    eventos = storage.list_auditoria(conn)
+    assert any(e.acao == "tenant_cnpj_definido" for e in eventos)
+
+
+def test_gerar_cobranca_requires_tenant_auth(app, db_path):
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    conn.close()
+
+    response = app.test_client().post(f"/tenants/{tenant_id}/financeiro/{honorario.id}/gerar-cobranca")
+
+    assert response.status_code == 403
+
+
+def test_gerar_cobranca_requires_asaas_api_key(app, db_path):
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    conn.close()
+
+    response = app.test_client().post(_tenant_url(app, f"/financeiro/{honorario.id}/gerar-cobranca"))
+
+    assert response.status_code == 400
+    assert b"ASAAS_API_KEY" in response.data
+
+
+def test_gerar_cobranca_requires_tenant_cnpj(app, db_path, monkeypatch):
+    monkeypatch.setenv("ASAAS_API_KEY", "APIKEY123")
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    conn.close()
+
+    response = app.test_client().post(_tenant_url(app, f"/financeiro/{honorario.id}/gerar-cobranca"))
+
+    assert response.status_code == 400
+    assert b"CNPJ" in response.data
+
+
+def test_gerar_cobranca_cria_cobranca_e_audita(app, db_path, monkeypatch):
+    monkeypatch.setenv("ASAAS_API_KEY", "APIKEY123")
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    storage.set_tenant_cnpj(conn, tenant_id, "11.222.333/0001-44")
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    conn.close()
+
+    with patch("src.fiscal_monitor.server.obter_ou_criar_cliente", return_value="cus_123") as mock_cliente, patch(
+        "src.fiscal_monitor.server.criar_cobranca",
+        return_value={"id": "pay_123", "invoiceUrl": "https://asaas.com/i/abc"},
+    ) as mock_cobranca:
+        response = app.test_client().post(_tenant_url(app, f"/financeiro/{honorario.id}/gerar-cobranca"))
+
+    assert response.status_code == 302
+    mock_cliente.assert_called_once()
+    mock_cobranca.assert_called_once()
+    conn = storage.connect(db_path)
+    cobranca = storage.get_cobranca_asaas_by_honorario(conn, honorario.id)
+    assert cobranca.asaas_payment_id == "pay_123"
+    assert cobranca.invoice_url == "https://asaas.com/i/abc"
+    eventos = storage.list_auditoria(conn)
+    assert any(e.acao == "cobranca_gerada" for e in eventos)
+
+
+def test_gerar_cobranca_rejeita_duplicada(app, db_path, monkeypatch):
+    monkeypatch.setenv("ASAAS_API_KEY", "APIKEY123")
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    storage.set_tenant_cnpj(conn, tenant_id, "11.222.333/0001-44")
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    storage.create_cobranca_asaas(conn, honorario.id, "cus_123", "pay_123", "https://asaas.com/i/abc")
+    conn.close()
+
+    response = app.test_client().post(_tenant_url(app, f"/financeiro/{honorario.id}/gerar-cobranca"))
+
+    assert response.status_code == 400
+
+
+def test_gerar_cobranca_retorna_502_em_erro_do_provedor(app, db_path, monkeypatch):
+    monkeypatch.setenv("ASAAS_API_KEY", "APIKEY123")
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    storage.set_tenant_cnpj(conn, tenant_id, "11.222.333/0001-44")
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    conn.close()
+
+    with patch("src.fiscal_monitor.server.obter_ou_criar_cliente", side_effect=CobrancaError("CNPJ inválido")):
+        response = app.test_client().post(_tenant_url(app, f"/financeiro/{honorario.id}/gerar-cobranca"))
+
+    assert response.status_code == 502
+
+
+def test_webhook_asaas_ignora_sem_segredo_configurado(app):
+    response = app.test_client().post(
+        "/webhooks/asaas", json={"payment": {"id": "pay_123", "status": "RECEIVED"}}
+    )
+    assert response.status_code == 200
+
+
+def test_webhook_asaas_ignora_segredo_errado(app, monkeypatch):
+    monkeypatch.setenv("ASAAS_WEBHOOK_TOKEN", "segredo-certo")
+    response = app.test_client().post(
+        "/webhooks/asaas",
+        json={"payment": {"id": "pay_123", "status": "RECEIVED"}},
+        headers={"asaas-access-token": "segredo-errado"},
+    )
+    assert response.status_code == 200
+
+
+def test_webhook_asaas_atualiza_status_e_marca_honorario_pago(app, db_path, monkeypatch):
+    monkeypatch.setenv("ASAAS_WEBHOOK_TOKEN", "segredo-certo")
+    conn = storage.connect(db_path)
+    tenant_id = app.config["_tenant_id"]
+    honorario = storage.create_honorario(conn, tenant_id, "2026-10", 1500.00, "2026-11-05")
+    storage.create_cobranca_asaas(conn, honorario.id, "cus_123", "pay_123", "https://asaas.com/i/abc")
+    conn.close()
+
+    response = app.test_client().post(
+        "/webhooks/asaas",
+        json={"payment": {"id": "pay_123", "status": "RECEIVED"}},
+        headers={"asaas-access-token": "segredo-certo"},
+    )
+
+    assert response.status_code == 200
+    conn = storage.connect(db_path)
+    cobranca = storage.get_cobranca_asaas_by_honorario(conn, honorario.id)
+    assert cobranca.status == "recebido"
+    atualizado = [h for h in storage.list_honorarios(conn, tenant_id) if h.id == honorario.id][0]
+    assert atualizado.status == "pago"
+    eventos = storage.list_auditoria(conn)
+    assert any(e.acao == "cobranca_status_alterado" for e in eventos)
 
 
 def test_auditoria_requires_admin(app):

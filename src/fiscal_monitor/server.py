@@ -15,7 +15,7 @@ from datetime import date
 from flask import Flask, Response, after_this_request, jsonify, redirect, render_template_string, request, send_file
 
 from src.common.web_styles import page
-from src.common.webauth import admin_authenticated, cron_authorized, require_admin
+from src.common.webauth import admin_authenticated, cron_authorized, require_papel
 from src.fiscal_monitor import monitor, storage
 from src.fiscal_monitor.cron import check_all_tenants, run_infosimples_semanal
 from src.fiscal_monitor.infosimples import (
@@ -33,6 +33,9 @@ from src.fiscal_monitor.infosimples import (
     montar_situacao_fgts,
     montar_situacao_fiscal,
 )
+from src.fiscal_monitor.asaas import CobrancaError, criar_cobranca, obter_ou_criar_cliente
+from src.fiscal_monitor.clicksign import AssinaturaError, baixar_documento_assinado, criar_solicitacao
+from src.fiscal_monitor.email_client import EmailError, send_email
 from src.fiscal_monitor.pgfn_dados_abertos import ArquivoDadosAbertosError, importar_arquivo
 from src.fiscal_monitor.pdf import render_dossie_fiscal_pdf, render_pre_analise_pdf
 from src.fiscal_monitor.preanalise import (
@@ -47,13 +50,30 @@ from src.fiscal_monitor.preanalise import (
     only_digits,
     validar_cnpj,
 )
-from src.fiscal_monitor.models import ORGAOS_CERTIDAO, STATUS_HONORARIO, STATUS_OPORTUNIDADE_CREDITO, TIPOS_DOCUMENTO, TIPOS_OPORTUNIDADE_CREDITO
+from src.fiscal_monitor.models import ORGAOS_CERTIDAO, PAPEIS_ADMIN, PAPEL_PADRAO, STATUS_HONORARIO, STATUS_OPORTUNIDADE_CREDITO, TIPOS_DOCUMENTO, TIPOS_DOCUMENTO_ASSINAVEIS, TIPOS_OPORTUNIDADE_CREDITO
 from src.fiscal_monitor.providers import import_portfolio_csv
 from src.fiscal_monitor.reforma import FATURAMENTO_MAXIMO, FATURAMENTO_MINIMO, simular
 from src.fiscal_monitor.risco import calcular_score_risco, certidao_status, orgaos_exigidos
 from werkzeug.security import generate_password_hash
 
 from src.campaigns import storage as campaigns_storage
+
+_MAPA_EVENTOS_CLICKSIGN = {
+    "sign": "assinado",
+    "auto_close": "assinado",
+    "refusal": "recusado",
+    "cancel": "cancelado",
+    "deadline": "cancelado",
+}  # nomes de evento a confirmar contra a documentação atual da Clicksign
+
+_MAPA_EVENTOS_ASAAS = {
+    "CONFIRMED": "confirmado",
+    "RECEIVED": "recebido",
+    "RECEIVED_IN_CASH": "recebido",
+    "OVERDUE": "atrasado",
+    "DELETED": "cancelado",
+    "REFUNDED": "cancelado",
+}  # valores de `payment.status` a confirmar contra a documentação atual da Asaas
 
 _TENANTS_TEMPLATE = page("Capta", """
 <h1>Capta</h1>
@@ -165,6 +185,14 @@ _TENANT_DETAIL_TEMPLATE = page("{{ tenant.nome }}", """
   <a href="/reforma-tributaria">Simulador da Reforma Tributária</a>
   <a href="/tenants/{{ tenant.id }}/financeiro?token={{ request.args.get('token', '') }}">Financeiro</a>
 </nav>
+
+<p class="lede">CNPJ do escritório (necessário pra gerar cobrança real via Asaas):
+{% if tenant.cnpj %}{{ tenant.cnpj }}{% else %}
+<form method="post" action="/tenants/{{ tenant.id }}/cnpj?token={{ request.args.get('token', '') }}" class="inline">
+  <input type="text" name="cnpj" placeholder="00.000.000/0000-00" required>
+  <button type="submit">Salvar</button>
+</form>
+{% endif %}</p>
 
 <h2>Carteira</h2>
 <table>
@@ -383,13 +411,30 @@ _DOCUMENTOS_TEMPLATE = page("Documentos — {{ cnpj.cnpj }}", """
 
 <h2>Documentos enviados</h2>
 <table>
-<tr><th>Tipo</th><th>Arquivo</th><th>Enviado em</th><th></th></tr>
+<tr><th>Tipo</th><th>Arquivo</th><th>Enviado em</th><th></th><th>Assinatura eletrônica</th></tr>
 {% for documento in documentos %}
+{% set solicitacao = solicitacoes_por_documento.get(documento.id) %}
 <tr>
   <td>{{ documento.tipo }}</td>
   <td>{{ documento.nome_arquivo }}</td>
   <td>{{ documento.criado_em[:10] }}</td>
   <td><a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/documentos/{{ documento.id }}/baixar?token={{ request.args.get('token', '') }}">baixar</a></td>
+  <td>
+    {% if documento.tipo not in tipos_assinaveis %}
+    —
+    {% elif not solicitacao %}
+    <form method="post" action="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/documentos/{{ documento.id }}/solicitar-assinatura?token={{ request.args.get('token', '') }}" class="inline">
+      <input type="text" name="signatario_nome" placeholder="Nome do signatário" required>
+      <input type="email" name="signatario_email" placeholder="E-mail do signatário" required>
+      <button type="submit">Solicitar assinatura</button>
+    </form>
+    {% elif solicitacao.status == "assinado" and solicitacao.documento_assinado_id %}
+    status: assinado —
+    <a href="/tenants/{{ cnpj.tenant_id }}/cnpjs/{{ cnpj.id }}/documentos/{{ solicitacao.documento_assinado_id }}/baixar?token={{ request.args.get('token', '') }}">baixar versão assinada</a>
+    {% else %}
+    status: {{ solicitacao.status }}
+    {% endif %}
+  </td>
 </tr>
 {% endfor %}
 </table>
@@ -443,8 +488,13 @@ pra acompanhar status e valor estimado com o cliente.</p>
 _FINANCEIRO_TEMPLATE = page("Financeiro — {{ tenant.nome }}", """
 <p><a href="/tenants/{{ tenant.id }}?token={{ request.args.get('token', '') }}">&larr; voltar pro escritório</a></p>
 <h1>Financeiro — {{ tenant.nome }}</h1>
-<p class="lede">Controle de honorários por competência — sem gateway de pagamento ainda,
-é um registro manual de cobrança.</p>
+<p class="lede">Controle de honorários por competência. A cobrança real (boleto/PIX/cartão,
+via Asaas) é opcional — sem gerar cobrança, o status continua marcado manualmente.</p>
+
+{% if not tenant.cnpj %}
+<div class="alert">CNPJ do escritório não cadastrado — necessário pra gerar cobrança real.
+<a href="/tenants/{{ tenant.id }}?token={{ request.args.get('token', '') }}">Cadastre na página do escritório &rarr;</a></div>
+{% endif %}
 
 <h2>Lançar honorário</h2>
 <form method="post" class="card">
@@ -456,8 +506,9 @@ _FINANCEIRO_TEMPLATE = page("Financeiro — {{ tenant.nome }}", """
 
 <h2>Honorários lançados</h2>
 <table>
-<tr><th>Competência</th><th>Valor</th><th>Vencimento</th><th>Status</th></tr>
+<tr><th>Competência</th><th>Valor</th><th>Vencimento</th><th>Status</th><th>Cobrança (Asaas)</th></tr>
 {% for honorario in honorarios %}
+{% set cobranca = cobrancas_por_honorario.get(honorario.id) %}
 <tr>
   <td>{{ honorario.competencia }}</td>
   <td>R$ {{ "%.2f"|format(honorario.valor) }}</td>
@@ -470,6 +521,17 @@ _FINANCEIRO_TEMPLATE = page("Financeiro — {{ tenant.nome }}", """
         {% endfor %}
       </select>
     </form>
+  </td>
+  <td>
+    {% if cobranca %}
+    status: {{ cobranca.status }} — <a href="{{ cobranca.invoice_url }}" target="_blank" rel="noopener">ver boleto/PIX</a>
+    {% elif honorario.status == "pendente" and tenant.cnpj %}
+    <form method="post" action="/tenants/{{ tenant.id }}/financeiro/{{ honorario.id }}/gerar-cobranca?token={{ request.args.get('token', '') }}" class="inline">
+      <button type="submit">Gerar cobrança</button>
+    </form>
+    {% else %}
+    —
+    {% endif %}
   </td>
 </tr>
 {% endfor %}
@@ -578,18 +640,30 @@ _USUARIOS_TEMPLATE = page("Usuários da equipe", """
   <label>Nome<input type="text" name="nome" value="{{ nome or '' }}"></label>
   <label>Usuário (login)<input type="text" name="username" required value="{{ username or '' }}"></label>
   <label>Senha<input type="password" name="password" required minlength="8"></label>
+  <label>Papel
+    <select name="papel">
+      {% for papel in papeis %}<option value="{{ papel }}" {% if papel == "operador" %}selected{% endif %}>{{ papel }}</option>{% endfor %}
+    </select>
+  </label>
   <button type="submit">Cadastrar</button>
 </form>
 
 <h2>Acessos cadastrados</h2>
 <table>
-<tr><th>Usuário</th><th>Nome</th><th>Criado em</th><th>Status</th><th></th></tr>
+<tr><th>Usuário</th><th>Nome</th><th>Criado em</th><th>Status</th><th>Papel</th><th></th></tr>
 {% for usuario in usuarios %}
 <tr>
   <td>{{ usuario.username }}</td>
   <td>{{ usuario.nome or "-" }}</td>
   <td>{{ usuario.criado_em[:10] }}</td>
   <td>{{ "ativo" if usuario.ativo else "desativado" }}</td>
+  <td>
+    <form method="post" action="/admin/usuarios/{{ usuario.id }}/papel" class="inline">
+      <select name="papel" onchange="this.form.submit()">
+        {% for papel in papeis %}<option value="{{ papel }}" {% if papel == usuario.papel %}selected{% endif %}>{{ papel }}</option>{% endfor %}
+      </select>
+    </form>
+  </td>
   <td>
     <form method="post" action="/admin/usuarios/{{ usuario.id }}/alternar-ativo" class="inline">
       <button type="submit">{{ "Desativar" if usuario.ativo else "Reativar" }}</button>
@@ -848,6 +922,88 @@ def create_app(
     def health():
         return jsonify({"status": "ok"})
 
+    @app.post("/webhooks/clicksign")
+    def webhook_clicksign():
+        """Recebe eventos da Clicksign quando um envelope é assinado/
+        recusado/cancelado. Sempre responde 200 — a Clicksign (como a
+        Meta no webhook do WhatsApp) faz retry agressivo em não-2xx — e só
+        processa o evento quando o segredo configurado bate; sem
+        `CLICKSIGN_WEBHOOK_SECRET` configurado ou com o header errado, só
+        ignora silenciosamente (nome exato do header a confirmar contra a
+        documentação atual da Clicksign).
+        """
+        secret = os.environ.get("CLICKSIGN_WEBHOOK_SECRET")
+        header_valor = request.headers.get("X-Clicksign-Secret", "")
+        if not secret or not secrets.compare_digest(header_valor, secret):
+            return jsonify({"ok": False}), 200
+
+        payload = request.get_json(force=True, silent=True) or {}
+        envelope_id = payload.get("envelope_id") or payload.get("data", {}).get("id")
+        evento = payload.get("event") or payload.get("name")
+        novo_status = _MAPA_EVENTOS_CLICKSIGN.get(evento)
+
+        if envelope_id and novo_status:
+            conn = _connect()
+            solicitacao = storage.get_solicitacao_assinatura_by_envelope(conn, envelope_id)
+            if solicitacao is not None:
+                documento_assinado_id = None
+                if novo_status == "assinado":
+                    token = os.environ.get("CLICKSIGN_API_TOKEN")
+                    if token:
+                        try:
+                            conteudo_assinado = baixar_documento_assinado(envelope_id, token)
+                            doc_original = storage.get_documento(conn, solicitacao.documento_id)
+                            novo_doc = storage.create_documento(
+                                conn, doc_original.cnpj_id, doc_original.tipo,
+                                f"{doc_original.nome_arquivo} (assinado)", conteudo_assinado,
+                            )
+                            documento_assinado_id = novo_doc.id
+                        except AssinaturaError:
+                            pass  # mantém o status "assinado" mesmo se o download do PDF falhar
+                storage.set_solicitacao_assinatura_status(conn, solicitacao.id, novo_status, documento_assinado_id)
+                storage.registrar_auditoria(
+                    conn, "clicksign (webhook)", "assinatura_status_alterado", "solicitacao_assinatura",
+                    solicitacao.id, f"status={novo_status}",
+                )
+            conn.close()
+
+        return jsonify({"ok": True}), 200
+
+    @app.post("/webhooks/asaas")
+    def webhook_asaas():
+        """Recebe eventos da Asaas quando uma cobrança é paga/atrasa/
+        cancelada. Sempre responde 200 (mesmo motivo do webhook da
+        Clicksign acima); sem `ASAAS_WEBHOOK_TOKEN` configurado ou com o
+        header errado, só ignora silenciosamente (nome exato do header a
+        confirmar contra a documentação atual da Asaas).
+        """
+        secret = os.environ.get("ASAAS_WEBHOOK_TOKEN")
+        header_valor = request.headers.get("asaas-access-token", "")
+        if not secret or not secrets.compare_digest(header_valor, secret):
+            return jsonify({"ok": False}), 200
+
+        payload = request.get_json(force=True, silent=True) or {}
+        payment = payload.get("payment") or {}
+        payment_id = payment.get("id")
+        novo_status = _MAPA_EVENTOS_ASAAS.get(payment.get("status"))
+
+        if payment_id and novo_status:
+            conn = _connect()
+            cobranca = storage.get_cobranca_asaas_by_payment_id(conn, payment_id)
+            if cobranca is not None:
+                storage.set_cobranca_asaas_status(conn, cobranca.id, novo_status)
+                if novo_status in ("confirmado", "recebido"):
+                    storage.set_honorario_status(conn, cobranca.honorario_id, "pago")
+                elif novo_status == "atrasado":
+                    storage.set_honorario_status(conn, cobranca.honorario_id, "atrasado")
+                storage.registrar_auditoria(
+                    conn, "asaas (webhook)", "cobranca_status_alterado", "cobranca_asaas", cobranca.id,
+                    f"status={novo_status}",
+                )
+            conn.close()
+
+        return jsonify({"ok": True}), 200
+
     def _rodar_check_all(conn, forcar_infosimples: bool = False) -> dict:
         """Corpo de verdade do check diário — chamado tanto pelo cron
         (`/cron/check-all`) quanto pelo botão manual de admin, igual ao
@@ -885,14 +1041,14 @@ def create_app(
 
     @app.get("/admin/check-all/rodar-agora")
     def check_all_rodar_agora_form():
-        unauthorized = require_admin()
+        unauthorized = require_papel("operador")
         if unauthorized:
             return unauthorized
         return render_template_string(_CHECK_ALL_RODAR_AGORA_TEMPLATE, resultado=None)
 
     @app.post("/admin/check-all/rodar-agora")
     def check_all_rodar_agora():
-        unauthorized = require_admin()
+        unauthorized = require_papel("operador")
         if unauthorized:
             return unauthorized
         forcar_infosimples = request.form.get("forcar_infosimples") == "on"
@@ -907,7 +1063,7 @@ def create_app(
 
     @app.route("/admin/tenants/novo", methods=["GET", "POST"])
     def novo_tenant():
-        unauthorized = require_admin()
+        unauthorized = require_papel("gestor")
         if unauthorized:
             return unauthorized
 
@@ -946,7 +1102,7 @@ def create_app(
 
     @app.route("/admin/usuarios", methods=["GET", "POST"])
     def admin_usuarios():
-        unauthorized = require_admin()
+        unauthorized = require_papel("gestor")
         if unauthorized:
             return unauthorized
 
@@ -955,11 +1111,14 @@ def create_app(
         if request.method == "GET":
             usuarios = storage.list_admin_users(conn)
             conn.close()
-            return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios)
+            return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios, papeis=PAPEIS_ADMIN)
 
         nome = (request.form.get("nome") or "").strip() or None
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
+        papel = (request.form.get("papel") or "").strip()
+        if papel not in PAPEIS_ADMIN:
+            papel = PAPEL_PADRAO
 
         if not username or len(password) < 8:
             usuarios = storage.list_admin_users(conn)
@@ -968,6 +1127,7 @@ def create_app(
                 render_template_string(
                     _USUARIOS_TEMPLATE,
                     usuarios=usuarios,
+                    papeis=PAPEIS_ADMIN,
                     erro="Usuário é obrigatório e a senha precisa ter pelo menos 8 caracteres.",
                     nome=nome,
                     username=username,
@@ -980,19 +1140,22 @@ def create_app(
             conn.close()
             return (
                 render_template_string(
-                    _USUARIOS_TEMPLATE, usuarios=usuarios, erro=f"Já existe um usuário '{username}'.", nome=nome
+                    _USUARIOS_TEMPLATE, usuarios=usuarios, papeis=PAPEIS_ADMIN,
+                    erro=f"Já existe um usuário '{username}'.", nome=nome,
                 ),
                 400,
             )
 
-        storage.create_admin_user(conn, username, generate_password_hash(password), nome=nome)
+        storage.create_admin_user(conn, username, generate_password_hash(password), nome=nome, papel=papel)
         usuarios = storage.list_admin_users(conn)
         conn.close()
-        return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios, sucesso=f"Usuário '{username}' cadastrado.")
+        return render_template_string(
+            _USUARIOS_TEMPLATE, usuarios=usuarios, papeis=PAPEIS_ADMIN, sucesso=f"Usuário '{username}' cadastrado."
+        )
 
     @app.post("/admin/usuarios/<int:user_id>/alternar-ativo")
     def alternar_ativo_usuario(user_id: int):
-        unauthorized = require_admin()
+        unauthorized = require_papel("gestor")
         if unauthorized:
             return unauthorized
 
@@ -1006,11 +1169,30 @@ def create_app(
         storage.set_admin_user_ativo(conn, user_id, not alvo.ativo)
         usuarios = storage.list_admin_users(conn)
         conn.close()
-        return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios)
+        return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios, papeis=PAPEIS_ADMIN)
+
+    @app.post("/admin/usuarios/<int:user_id>/papel")
+    def alterar_papel_usuario(user_id: int):
+        unauthorized = require_papel("gestor")
+        if unauthorized:
+            return unauthorized
+
+        novo_papel = (request.form.get("papel") or "").strip()
+        if novo_papel not in PAPEIS_ADMIN:
+            return jsonify({"error": "papel inválido"}), 400
+
+        conn = _connect()
+        storage.set_admin_user_papel(conn, user_id, novo_papel)
+        storage.registrar_auditoria(
+            conn, _quem_atual(), "usuario_papel_alterado", "admin_user", user_id, f"papel={novo_papel}"
+        )
+        usuarios = storage.list_admin_users(conn)
+        conn.close()
+        return render_template_string(_USUARIOS_TEMPLATE, usuarios=usuarios, papeis=PAPEIS_ADMIN)
 
     @app.route("/admin/pgfn-dados-abertos", methods=["GET", "POST"])
     def pgfn_dados_abertos():
-        unauthorized = require_admin()
+        unauthorized = require_papel("operador")
         if unauthorized:
             return unauthorized
 
@@ -1047,7 +1229,7 @@ def create_app(
 
     @app.get("/admin/status")
     def status_sistema():
-        unauthorized = require_admin()
+        unauthorized = require_papel("leitor")
         if unauthorized:
             return unauthorized
 
@@ -1105,7 +1287,7 @@ def create_app(
 
     @app.get("/admin/auditoria")
     def auditoria():
-        unauthorized = require_admin()
+        unauthorized = require_papel("leitor")
         if unauthorized:
             return unauthorized
         entidade_filtro = request.args.get("entidade") or None
@@ -1121,7 +1303,7 @@ def create_app(
 
     @app.route("/pre-analise", methods=["GET", "POST"])
     def pre_analise():
-        unauthorized = require_admin()
+        unauthorized = require_papel("operador")
         if unauthorized:
             return unauthorized
 
@@ -1246,7 +1428,7 @@ def create_app(
 
     @app.get("/pre-analise/cartao-cnpj")
     def cartao_cnpj():
-        unauthorized = require_admin()
+        unauthorized = require_papel("operador")
         if unauthorized:
             return unauthorized
 
@@ -1276,7 +1458,7 @@ def create_app(
         de verdade está acontecendo (token válido, API respondendo),
         separado de qualquer problema de como o resultado é exibido.
         """
-        unauthorized = require_admin()
+        unauthorized = require_papel("leitor")
         if unauthorized:
             return unauthorized
 
@@ -1318,7 +1500,7 @@ def create_app(
 
     @app.get("/tenants")
     def tenants_list():
-        unauthorized = require_admin()
+        unauthorized = require_papel("leitor")
         if unauthorized:
             return unauthorized
         conn = _connect()
@@ -1630,9 +1812,15 @@ def create_app(
                 )
 
         documentos_lista = storage.list_documentos(conn, cnpj_id)
+        solicitacoes_por_documento = {}
+        for documento in documentos_lista:
+            solicitacoes = storage.list_solicitacoes_assinatura(conn, documento.id)
+            if solicitacoes:
+                solicitacoes_por_documento[documento.id] = solicitacoes[0]
         conn.close()
         return render_template_string(
-            _DOCUMENTOS_TEMPLATE, cnpj=cnpj, documentos=documentos_lista, tipos=sorted(TIPOS_DOCUMENTO)
+            _DOCUMENTOS_TEMPLATE, cnpj=cnpj, documentos=documentos_lista, tipos=sorted(TIPOS_DOCUMENTO),
+            solicitacoes_por_documento=solicitacoes_por_documento, tipos_assinaveis=TIPOS_DOCUMENTO_ASSINAVEIS,
         )
 
     @app.get("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/documentos/<int:documento_id>/baixar")
@@ -1654,6 +1842,54 @@ def create_app(
             arquivo, mimetype="application/octet-stream",
             headers={"Content-Disposition": f"attachment; filename={documento.nome_arquivo}"},
         )
+
+    @app.post("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/documentos/<int:documento_id>/solicitar-assinatura")
+    def solicitar_assinatura_documento(tenant_id: int, cnpj_id: int, documento_id: int):
+        conn = _connect()
+        tenant, cnpj = _get_cnpj_or_404(conn, tenant_id, cnpj_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "CNPJ não encontrado nesse tenant"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        token = os.environ.get("CLICKSIGN_API_TOKEN")
+        if not token:
+            conn.close()
+            return jsonify({"error": "Assinatura eletrônica não configurada (CLICKSIGN_API_TOKEN ausente)."}), 400
+
+        documento = storage.get_documento(conn, documento_id)
+        if documento is None or documento.cnpj_id != cnpj_id:
+            conn.close()
+            return jsonify({"error": "documento não encontrado"}), 404
+        if documento.tipo not in TIPOS_DOCUMENTO_ASSINAVEIS:
+            conn.close()
+            return jsonify({"error": "este tipo de documento não é assinável"}), 400
+
+        signatario_nome = (request.form.get("signatario_nome") or "").strip()
+        signatario_email = (request.form.get("signatario_email") or "").strip()
+        if not signatario_nome or not signatario_email:
+            conn.close()
+            return jsonify({"error": "nome e e-mail do signatário são obrigatórios"}), 400
+
+        conteudo = storage.get_documento_arquivo(conn, documento_id)
+        try:
+            resultado = criar_solicitacao(documento.nome_arquivo, conteudo, signatario_nome, signatario_email, token)
+        except AssinaturaError as exc:
+            conn.close()
+            return jsonify({"error": str(exc)}), 502
+
+        solicitacao = storage.create_solicitacao_assinatura(
+            conn, documento_id, resultado["envelope_id"], signatario_nome, signatario_email
+        )
+        storage.registrar_auditoria(
+            conn, _quem_atual(), "assinatura_solicitada", "solicitacao_assinatura", solicitacao.id,
+            f"documento_id={documento_id} signatario={signatario_email}",
+        )
+        conn.close()
+        token_param = request.args.get("token", "")
+        return redirect(f"/tenants/{tenant_id}/cnpjs/{cnpj_id}/documentos?token={token_param}")
 
     @app.route("/tenants/<int:tenant_id>/cnpjs/<int:cnpj_id>/oportunidades", methods=["GET", "POST"])
     def oportunidades(tenant_id: int, cnpj_id: int):
@@ -1736,9 +1972,15 @@ def create_app(
                 )
 
         honorarios_lista = storage.list_honorarios(conn, tenant_id)
+        cobrancas_por_honorario = {}
+        for honorario in honorarios_lista:
+            cobranca = storage.get_cobranca_asaas_by_honorario(conn, honorario.id)
+            if cobranca is not None:
+                cobrancas_por_honorario[honorario.id] = cobranca
         conn.close()
         return render_template_string(
-            _FINANCEIRO_TEMPLATE, tenant=tenant, honorarios=honorarios_lista, status_opcoes=STATUS_HONORARIO
+            _FINANCEIRO_TEMPLATE, tenant=tenant, honorarios=honorarios_lista, status_opcoes=STATUS_HONORARIO,
+            cobrancas_por_honorario=cobrancas_por_honorario,
         )
 
     @app.post("/tenants/<int:tenant_id>/financeiro/<int:honorario_id>/status")
@@ -1762,9 +2004,89 @@ def create_app(
         token = request.args.get("token", "")
         return redirect(f"/tenants/{tenant_id}/financeiro?token={token}")
 
+    @app.post("/tenants/<int:tenant_id>/financeiro/<int:honorario_id>/gerar-cobranca")
+    def gerar_cobranca_honorario(tenant_id: int, honorario_id: int):
+        conn = _connect()
+        tenant = storage.get_tenant(conn, tenant_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "escritório não encontrado"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        api_key = os.environ.get("ASAAS_API_KEY")
+        if not api_key:
+            conn.close()
+            return jsonify({"error": "Gateway de pagamento não configurado (ASAAS_API_KEY ausente)."}), 400
+        if not tenant.cnpj:
+            conn.close()
+            return jsonify({"error": "Cadastre o CNPJ do escritório antes de gerar cobranças."}), 400
+
+        honorario = next((h for h in storage.list_honorarios(conn, tenant_id) if h.id == honorario_id), None)
+        if honorario is None:
+            conn.close()
+            return jsonify({"error": "honorário não encontrado"}), 404
+        if storage.get_cobranca_asaas_by_honorario(conn, honorario_id) is not None:
+            conn.close()
+            return jsonify({"error": "já existe cobrança gerada para este honorário"}), 400
+
+        try:
+            customer_id = obter_ou_criar_cliente(tenant.nome, tenant.cnpj, tenant.contato_email, api_key)
+            resultado = criar_cobranca(
+                customer_id, honorario.valor, honorario.vencimento, f"Honorário {honorario.competencia}", api_key
+            )
+        except CobrancaError as exc:
+            conn.close()
+            return jsonify({"error": str(exc)}), 502
+
+        cobranca = storage.create_cobranca_asaas(
+            conn, honorario_id, customer_id, resultado["id"], resultado["invoiceUrl"]
+        )
+        storage.registrar_auditoria(
+            conn, _quem_atual(), "cobranca_gerada", "cobranca_asaas", cobranca.id, f"honorario_id={honorario_id}"
+        )
+        if tenant.contato_email:
+            smtp_host = os.environ.get("SMTP_HOST")
+            smtp_port = os.environ.get("SMTP_PORT")
+            smtp_username = os.environ.get("SMTP_USERNAME")
+            smtp_password = os.environ.get("SMTP_PASSWORD")
+            if smtp_host and smtp_port and smtp_username and smtp_password:
+                try:
+                    send_email(
+                        tenant.contato_email, f"Cobrança — {honorario.competencia}",
+                        f"Segue o link de pagamento do honorário de {honorario.competencia}: {resultado['invoiceUrl']}",
+                        smtp_host, int(smtp_port), smtp_username, smtp_password,
+                        smtp_from=os.environ.get("SMTP_FROM"),
+                    )
+                except EmailError:
+                    pass  # não bloqueia a geração da cobrança por falha de e-mail
+        conn.close()
+        token = request.args.get("token", "")
+        return redirect(f"/tenants/{tenant_id}/financeiro?token={token}")
+
+    @app.post("/tenants/<int:tenant_id>/cnpj")
+    def definir_cnpj_tenant(tenant_id: int):
+        conn = _connect()
+        tenant = storage.get_tenant(conn, tenant_id)
+        if tenant is None:
+            conn.close()
+            return jsonify({"error": "escritório não encontrado"}), 404
+        if not _tenant_authorized(tenant):
+            conn.close()
+            return jsonify({"error": "acesso não autorizado — informe ?token=... ou faça login de admin"}), 403
+
+        cnpj = (request.form.get("cnpj") or "").strip()
+        if cnpj:
+            storage.set_tenant_cnpj(conn, tenant_id, cnpj)
+            storage.registrar_auditoria(conn, _quem_atual(), "tenant_cnpj_definido", "tenant", tenant_id, f"cnpj={cnpj}")
+        conn.close()
+        token = request.args.get("token", "")
+        return redirect(f"/tenants/{tenant_id}?token={token}")
+
     @app.get("/reforma-tributaria")
     def reforma_tributaria():
-        unauthorized = require_admin()
+        unauthorized = require_papel("operador")
         if unauthorized:
             return unauthorized
         faturamento_raw = request.args.get("faturamento")

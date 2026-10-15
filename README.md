@@ -816,12 +816,93 @@ lógica tributária sem base real:
    documenta isso como diferencial pro escritório ver. **Venda:** "toda
    ação fica registrada — segurança que você pode mostrar pro cliente".
 
-**Deliberadamente fora desta fase:** RBAC granular, MFA, assinatura
-eletrônica de documento e gateway de pagamento de honorário. Cada um
-depende de decisão de fornecedor que a usuária precisa tomar antes (ex:
-Clicksign/Autentique pra assinatura, Asaas/Stripe pra pagamento, `pyotp`
-pra MFA) ou de escopo jurídico — mesmo cuidado que o projeto já teve com
-e-CAC/certificado digital (ver "O que este MVP não faz (ainda)" acima).
+### Fase 2 e 3 — RBAC granular, assinatura eletrônica (Clicksign) e gateway de pagamento (Asaas)
+
+Dos 4 itens deixados de fora da Fase 1 (RBAC, MFA, assinatura
+eletrônica, gateway de pagamento), a usuária decidiu entrar agora com 3
+— MFA continua de fora por ora:
+
+1. **RBAC granular** (`src/common/webauth.py`) — cada `AdminUser` tem um
+   `papel` (`leitor` < `operador` < `gestor`), além do login mestre via
+   `ADMIN_USERNAME`/`ADMIN_PASSWORD` (sempre o teto, nunca gravado em
+   linha nenhuma). `leitor` só visualiza (`/admin/status`,
+   `/admin/auditoria`, `/tenants`, diagnóstico); `operador` (padrão de
+   novas contas) soma o dia a dia (pré-análise, rodar checagem, Dados
+   Abertos da PGFN, simulador da reforma); `gestor` soma cadastro de
+   escritório e gestão de usuários (`/admin/usuarios`, incluindo
+   alterar o papel de outra conta). O acesso de qualquer admin à
+   carteira de um tenant específico (`/tenants/<id>/...`) **não muda**
+   — continua liberado pra qualquer papel autenticado, só a camada
+   administrativa (routes abaixo de `/admin/*` e a lista geral de
+   `/tenants`) é que passou a ser restrita por papel.
+2. **Assinatura eletrônica via Clicksign** (`src/fiscal_monitor/clicksign.py`)
+   — na tela de Documentos, documentos do tipo `contrato`/`procuracao`
+   ganham um botão "Solicitar assinatura" (nome/e-mail do signatário);
+   isso cria um envelope na Clicksign e grava uma `SolicitacaoAssinatura`
+   ligada ao documento original (tabela nova, não altera `documentos`).
+   Um webhook (`POST /webhooks/clicksign`, protegido por
+   `CLICKSIGN_WEBHOOK_SECRET`) atualiza o status quando o signatário
+   assina/recusa, e ao assinar baixa o PDF final e grava como um **novo**
+   `Documento` (preserva as duas versões). Sem `CLICKSIGN_API_TOKEN`
+   configurada, o botão simplesmente retorna erro claro, sem quebrar o
+   resto da página — mesmo padrão de graceful degradation já usado pro
+   `INFOSIMPLES_API_TOKEN`/`CNPJA_API_TOKEN`.
+3. **Gateway de pagamento via Asaas** (`src/fiscal_monitor/asaas.py`) —
+   na tela Financeiro, honorários pendentes ganham um botão "Gerar
+   cobrança" que cria (ou reaproveita) o cliente na Asaas pelo CNPJ do
+   escritório — novo campo opcional `Tenant.cnpj`, preenchido na página
+   do escritório — e gera o boleto/PIX/cartão real (tabela nova
+   `CobrancaAsaas`, 1:1 com `Honorario`, sem alterar a tabela
+   `honorarios`). Um webhook (`POST /webhooks/asaas`, protegido por
+   `ASAAS_WEBHOOK_TOKEN`) marca a cobrança e o honorário correspondente
+   como pago/atrasado automaticamente, e tenta mandar o link de
+   pagamento por e-mail pro escritório (reaproveitando `send_email`) —
+   uma falha de e-mail não impede a cobrança de ser gerada. Sem
+   `ASAAS_API_KEY` configurada (ou sem o CNPJ do escritório
+   cadastrado), o botão retorna erro claro; sem gerar cobrança nenhuma,
+   o status do honorário continua podendo ser marcado manualmente, como
+   na Fase 1.
+
+**Variáveis de ambiente novas** (todas opcionais — ausentes, as
+features ficam desligadas sem afetar o resto do sistema):
+`CLICKSIGN_API_TOKEN`, `CLICKSIGN_WEBHOOK_SECRET`, `ASAAS_API_KEY`,
+`ASAAS_WEBHOOK_TOKEN`.
+
+**O que fica pendente, fora do código** — a lógica inteira (rotas,
+clientes HTTP, webhooks, templates) está implementada e testada via
+mock (`tests/test_fiscal_monitor_clicksign.py`,
+`tests/test_fiscal_monitor_asaas.py`, mais os testes de rota/webhook em
+`test_fiscal_monitor_server.py`), mas as integrações reais com
+Clicksign e Asaas dependem de passos que só a usuária pode fazer:
+
+1. Criar conta (sandbox e/ou produção) na Clicksign e na Asaas.
+2. Gerar `CLICKSIGN_API_TOKEN` e `ASAAS_API_KEY` nos painéis de cada
+   uma, e configurar como variável de ambiente no Vercel.
+3. Inventar e configurar `CLICKSIGN_WEBHOOK_SECRET` e
+   `ASAAS_WEBHOOK_TOKEN` (segredos escolhidos pela própria usuária) como
+   variável de ambiente no Vercel.
+4. Registrar `https://<domínio>/webhooks/clicksign` e
+   `https://<domínio>/webhooks/asaas` nos dashboards de cada provedor,
+   com o segredo correspondente no header configurado.
+5. Fazer um teste manual real de ponta a ponta: enviar um contrato pra
+   assinatura e assinar no sandbox da Clicksign (confirmar que o status
+   muda e o PDF assinado aparece); lançar um honorário, gerar a
+   cobrança e pagar no sandbox da Asaas (confirmar que o honorário vira
+   "pago" sozinho).
+
+Os paths/payloads exatos dos clientes HTTP (`clicksign.py`/`asaas.py`)
+são uma aproximação razoável das APIs v3 de cada provedor — sem
+credencial disponível neste ambiente de desenvolvimento pra validar
+contra a API real. Ao configurar as chaves de sandbox, confirme contra
+a documentação atual de cada provedor
+(https://developers.clicksign.com/, https://docs.asaas.com/) e ajuste
+se algum endpoint/campo tiver mudado — a estrutura do código (classe de
+erro, assinatura de cada função, onde o segredo é lido) já é definitiva,
+só os detalhes de payload podem precisar de ajuste fino.
+
+**MFA continua fora** — adicionar autenticação de dois fatores
+(ex: `pyotp`, TOTP/Google Authenticator) pro login de admin, se a
+usuária decidir entrar com isso depois.
 
 ## Roadmap (por viabilidade)
 
@@ -838,4 +919,5 @@ e-CAC/certificado digital (ver "O que este MVP não faz (ainda)" acima).
 | Monitoramento Fiscal — integração real via Serpro Integra Contador (canal oficial Receita Federal) | Difícil (contrato Serpro + certificado digital) | ⏳ Terreno preparado (`SerproIntegraContadorProvider`), não ativado — ver seção acima |
 | Campanha de prospecção PGFN — envio + follow-up + rastreio + relatório semanal | Médio (depende da Exa Search API pra achar e-mail) | ✅ MVP implementado — textos de e-mail ainda são rascunho, ver seção acima |
 | Gaps "LEACTIS 360" — funil de captação, documentos, oportunidades de crédito, faturamento, portal do cliente, trilha de auditoria | Fácil/Médio | ✅ Fase 1 implementada — ver seção acima |
-| Gaps "LEACTIS 360" — RBAC granular, MFA, assinatura eletrônica, gateway de pagamento | Difícil (depende de decisão de fornecedor/escopo jurídico) | ⏳ Fora desta fase por decisão, ver seção acima |
+| Gaps "LEACTIS 360" — RBAC granular, assinatura eletrônica (Clicksign), gateway de pagamento (Asaas) | Médio (código completo e testado; integração real depende de credenciais/webhooks configurados pela usuária) | ✅ Fase 2/3 implementada — ver seção acima |
+| Gaps "LEACTIS 360" — MFA | Difícil (depende de decisão de fornecedor) | ⏳ Fora desta fase por decisão, ver seção acima |

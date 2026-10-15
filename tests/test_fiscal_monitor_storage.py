@@ -33,6 +33,29 @@ def test_create_tenant_generates_unique_acesso_token():
     assert storage.get_tenant(conn, tenant_a.id).acesso_token == tenant_a.acesso_token
 
 
+def test_create_tenant_sem_cnpj_por_padrao():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    assert tenant.cnpj is None
+    assert storage.get_tenant(conn, tenant.id).cnpj is None
+
+
+def test_create_tenant_aceita_cnpj():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A", cnpj="11.222.333/0001-44")
+    assert tenant.cnpj == "11.222.333/0001-44"
+    assert storage.get_tenant(conn, tenant.id).cnpj == "11.222.333/0001-44"
+
+
+def test_set_tenant_cnpj_atualiza():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+
+    storage.set_tenant_cnpj(conn, tenant.id, "11.222.333/0001-44")
+
+    assert storage.get_tenant(conn, tenant.id).cnpj == "11.222.333/0001-44"
+
+
 def test_upsert_cnpj_inserts_then_updates_on_conflict():
     conn = _conn()
     tenant = storage.create_tenant(conn, "Escritório A")
@@ -200,6 +223,29 @@ def test_set_admin_user_ativo_toggles_flag():
     assert storage.get_admin_user_by_username(conn, "maria").ativo is False
 
 
+def test_create_admin_user_default_papel_eh_operador():
+    conn = _conn()
+    usuario = storage.create_admin_user(conn, "maria", "hash-a")
+    assert usuario.papel == "operador"
+    assert storage.get_admin_user_by_username(conn, "maria").papel == "operador"
+
+
+def test_create_admin_user_aceita_papel_explicito():
+    conn = _conn()
+    usuario = storage.create_admin_user(conn, "maria", "hash-a", papel="gestor")
+    assert usuario.papel == "gestor"
+    assert storage.get_admin_user_by_username(conn, "maria").papel == "gestor"
+
+
+def test_set_admin_user_papel_atualiza():
+    conn = _conn()
+    usuario = storage.create_admin_user(conn, "maria", "hash-a", papel="leitor")
+
+    storage.set_admin_user_papel(conn, usuario.id, "gestor")
+
+    assert storage.get_admin_user_by_username(conn, "maria").papel == "gestor"
+
+
 def test_upsert_cnpj_stores_and_preserves_uf():
     conn = _conn()
     tenant = storage.create_tenant(conn, "Escritório A")
@@ -290,6 +336,51 @@ def test_get_documento_arquivo_returns_none_when_missing():
     assert storage.get_documento_arquivo(conn, 999) is None
 
 
+def test_create_and_list_solicitacoes_assinatura():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+    doc = storage.create_documento(conn, cnpj.id, "contrato", "contrato.pdf", b"conteudo-fake")
+
+    solicitacao = storage.create_solicitacao_assinatura(conn, doc.id, "env-123", "Fulano", "fulano@exemplo.com")
+
+    assert solicitacao.status == "enviado"
+    assert solicitacao.documento_assinado_id is None
+    assert storage.list_solicitacoes_assinatura(conn, doc.id) == [solicitacao]
+
+
+def test_get_solicitacao_assinatura_by_envelope_returns_none_when_missing():
+    conn = _conn()
+    assert storage.get_solicitacao_assinatura_by_envelope(conn, "env-inexistente") is None
+
+
+def test_get_solicitacao_assinatura_by_envelope_encontra():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+    doc = storage.create_documento(conn, cnpj.id, "contrato", "contrato.pdf", b"conteudo-fake")
+    solicitacao = storage.create_solicitacao_assinatura(conn, doc.id, "env-123", "Fulano", "fulano@exemplo.com")
+
+    encontrada = storage.get_solicitacao_assinatura_by_envelope(conn, "env-123")
+
+    assert encontrada.id == solicitacao.id
+
+
+def test_set_solicitacao_assinatura_status_atualiza():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    cnpj = storage.upsert_cnpj(conn, tenant.id, "11.222.333/0001-44")
+    doc = storage.create_documento(conn, cnpj.id, "contrato", "contrato.pdf", b"conteudo-fake")
+    solicitacao = storage.create_solicitacao_assinatura(conn, doc.id, "env-123", "Fulano", "fulano@exemplo.com")
+    doc_assinado = storage.create_documento(conn, cnpj.id, "contrato", "contrato (assinado).pdf", b"assinado-fake")
+
+    storage.set_solicitacao_assinatura_status(conn, solicitacao.id, "assinado", doc_assinado.id)
+
+    atualizada = storage.get_solicitacao_assinatura_by_envelope(conn, "env-123")
+    assert atualizada.status == "assinado"
+    assert atualizada.documento_assinado_id == doc_assinado.id
+
+
 def test_create_and_list_oportunidades_credito():
     conn = _conn()
     tenant = storage.create_tenant(conn, "Escritório A")
@@ -332,6 +423,39 @@ def test_set_honorario_status_updates():
     storage.set_honorario_status(conn, hon.id, "pago")
 
     assert storage.list_honorarios(conn, tenant.id)[0].status == "pago"
+
+
+def test_create_and_get_cobranca_asaas_by_honorario():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    hon = storage.create_honorario(conn, tenant.id, "2026-10", 1200.0, "2026-11-05")
+
+    cobranca = storage.create_cobranca_asaas(conn, hon.id, "cus_123", "pay_123", "https://asaas.com/i/abc")
+
+    assert cobranca.status == "pendente"
+    assert storage.get_cobranca_asaas_by_honorario(conn, hon.id) == cobranca
+
+
+def test_get_cobranca_asaas_by_payment_id_encontra():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    hon = storage.create_honorario(conn, tenant.id, "2026-10", 1200.0, "2026-11-05")
+    cobranca = storage.create_cobranca_asaas(conn, hon.id, "cus_123", "pay_123", "https://asaas.com/i/abc")
+
+    encontrada = storage.get_cobranca_asaas_by_payment_id(conn, "pay_123")
+
+    assert encontrada.id == cobranca.id
+
+
+def test_set_cobranca_asaas_status_atualiza():
+    conn = _conn()
+    tenant = storage.create_tenant(conn, "Escritório A")
+    hon = storage.create_honorario(conn, tenant.id, "2026-10", 1200.0, "2026-11-05")
+    cobranca = storage.create_cobranca_asaas(conn, hon.id, "cus_123", "pay_123", "https://asaas.com/i/abc")
+
+    storage.set_cobranca_asaas_status(conn, cobranca.id, "recebido")
+
+    assert storage.get_cobranca_asaas_by_honorario(conn, hon.id).status == "recebido"
 
 
 def test_honorarios_pendentes_resumo_aggregates_pendente_e_atrasado():

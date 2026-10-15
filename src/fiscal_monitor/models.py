@@ -19,6 +19,7 @@ class Tenant:
     criado_em: str
     acesso_token: str = ""
     contato_email: str | None = None
+    cnpj: str | None = None  # CNPJ do próprio escritório — necessário pra gerar cobrança na Asaas (cpfCnpj)
 
 
 @dataclass
@@ -81,10 +82,18 @@ class Certidao:
     criado_em: str
 
 
+PAPEIS_ADMIN = ["leitor", "operador", "gestor"]
+PAPEL_PADRAO = "operador"
+
+
 @dataclass
 class AdminUser:
     """Conta individual de acesso ao painel de admin (login por pessoa da
     equipe, além do usuário/senha "mestre" em ADMIN_USERNAME/ADMIN_PASSWORD).
+
+    `papel` é a permissão gravada no banco (leitor < operador < gestor) —
+    o login mestre não tem papel gravado, é sempre o teto implícito
+    (ver `src/common/webauth.py`).
     """
 
     id: int
@@ -93,6 +102,7 @@ class AdminUser:
     nome: str | None
     criado_em: str
     ativo: bool = True
+    papel: str = PAPEL_PADRAO
 
 
 TIPOS_DOCUMENTO = {"contrato", "procuracao", "xml", "outro"}
@@ -111,6 +121,30 @@ class Documento:
     tipo: str
     nome_arquivo: str
     criado_em: str
+
+
+TIPOS_DOCUMENTO_ASSINAVEIS = {"contrato", "procuracao"}
+STATUS_ASSINATURA = ["enviado", "aguardando_assinatura", "assinado", "recusado", "cancelado"]
+
+
+@dataclass
+class SolicitacaoAssinatura:
+    """Solicitação de assinatura eletrônica (via Clicksign) de um
+    `Documento` já enviado — entidade separada, não altera `documentos`.
+    Quando `status == "assinado"`, `documento_assinado_id` aponta pro
+    NOVO `Documento` criado com o PDF assinado (preserva as duas
+    versões em vez de sobrescrever).
+    """
+
+    id: int
+    documento_id: int
+    provider_envelope_id: str
+    signatario_nome: str
+    signatario_email: str
+    status: str
+    documento_assinado_id: int | None
+    criado_em: str
+    atualizado_em: str
 
 
 TIPOS_OPORTUNIDADE_CREDITO = {
@@ -148,7 +182,8 @@ STATUS_HONORARIO = ["pendente", "pago", "atrasado"]
 @dataclass
 class Honorario:
     """Cobrança de honorário mensal de um tenant — registro de controle
-    (competência/valor/status), sem gateway de pagamento integrado ainda.
+    (competência/valor/status); o gateway de pagamento (Asaas) é opcional,
+    ver `CobrancaAsaas` abaixo — sem ele, o status continua marcado à mão.
     """
 
     id: int
@@ -158,6 +193,25 @@ class Honorario:
     status: str
     vencimento: str
     criado_em: str
+
+
+STATUS_COBRANCA_ASAAS = ["pendente", "confirmado", "recebido", "atrasado", "cancelado"]
+
+
+@dataclass
+class CobrancaAsaas:
+    """Cobrança real gerada na Asaas (boleto/PIX/cartão) pra um
+    `Honorario` — entidade separada, 1:1 (não altera `honorarios`); o
+    status aqui é espelhado pro `Honorario.status` via webhook."""
+
+    id: int
+    honorario_id: int
+    asaas_customer_id: str
+    asaas_payment_id: str
+    invoice_url: str
+    status: str
+    criado_em: str
+    atualizado_em: str
 
 
 @dataclass
