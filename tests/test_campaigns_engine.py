@@ -606,3 +606,15 @@ def test_link_whatsapp_de_contadores_usa_agenda_geral(monkeypatch):
     texto = unquote(engine.montar_link_whatsapp(_lead_tese("contadores_certificado")))
     assert "https://calendar.app.google/5DfZ6PfTF6eh3e4Z7" in texto
     assert "[DIA]" not in texto and "[HORÁRIO" not in texto
+
+
+def test_rodar_diario_nao_envia_nada_quando_pausado(monkeypatch):
+    monkeypatch.setenv("ENVIOS_PAUSADOS", "1")
+    conn = _conn()
+    storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    with patch("src.campaigns.engine.send_email") as mock_send, patch("src.campaigns.engine.send_email_html") as mock_html:
+        resultado = engine.rodar_diario(conn, "https://exemplo.com", "smtp.host", 587, "user", "pass")
+    mock_send.assert_not_called()
+    mock_html.assert_not_called()
+    assert resultado["enviados"] == 0 and resultado["pausado"] is True
+    assert storage.envios_de_hoje_por_tese(conn, TESE, "1970-01-01T00:00:00+00:00") == 0
