@@ -6,6 +6,7 @@ relatório semanal de abertura/clique.
 
 from __future__ import annotations
 
+import os
 import re
 import secrets
 from collections import Counter
@@ -196,6 +197,12 @@ mata a execução aos 300s, e cada etapa (busca de e-mail, busca de
 telefone, envio) precisa caber na fatia dela do orçamento total)."""
 
 
+def envios_pausados() -> bool:
+    """Chave de pausa: com a variável de ambiente ENVIOS_PAUSADOS=1 (ou true/sim), o cron e o
+    "Rodar agora" não enviam e-mail nenhum. Remover a variável retoma os envios."""
+    return (os.environ.get("ENVIOS_PAUSADOS") or "").strip().lower() in ("1", "true", "sim", "yes")
+
+
 def rodar_diario(
     conn, base_url: str, smtp_host: str, smtp_port: int, smtp_username: str, smtp_password: str,
     smtp_from: str | None = None,
@@ -212,6 +219,9 @@ def rodar_diario(
     é serializável em JSON, quem chamar isso direto num endpoint precisa
     tirar essa chave do dicionário antes de devolver a resposta).
     """
+    if envios_pausados():
+        print("[rodar_diario] ENVIOS_PAUSADOS ativo — nenhum e-mail enviado.")
+        return {"leads_verificados": 0, "enviados": 0, "erros": [], "leads_enviados": [], "pausado": True}
     leads_e_tipos = leads_para_enviar_hoje(conn)
     inicio = monotonic()
     enviados = 0
