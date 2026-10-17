@@ -368,3 +368,28 @@ def test_marcar_notificado_hoje_eh_idempotente():
     storage.marcar_notificado_hoje(conn, "resumo_whatsapp")  # não deve estourar erro de PK duplicada
 
     assert storage.ja_notificado_hoje(conn, "resumo_whatsapp") is True
+
+
+def test_envios_pausados_false_por_padrao():
+    conn = _conn()
+    assert storage.envios_pausados(conn) is False
+
+
+def test_pausar_envios_marca_pausado():
+    conn = _conn()
+    storage.pausar_envios(conn, "admin")
+    assert storage.envios_pausados(conn) is True
+
+
+def test_retomar_envios_desmarca_pausado():
+    conn = _conn()
+    storage.pausar_envios(conn, "admin")
+    storage.retomar_envios(conn, "admin")
+    assert storage.envios_pausados(conn) is False
+
+
+def test_pausar_envios_eh_idempotente():
+    conn = _conn()
+    storage.pausar_envios(conn, "admin")
+    storage.pausar_envios(conn, "admin")  # não deve estourar erro de PK duplicada
+    assert storage.envios_pausados(conn) is True

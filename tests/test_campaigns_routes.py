@@ -533,6 +533,98 @@ def test_rodar_agora_post_runs_and_sends_pending_leads(app, monkeypatch, campaig
     assert "E-mails enviados".encode() in response.data
 
 
+def test_pausar_campanha_requires_admin(app):
+    response = app.test_client().post("/admin/campanhas/pausar")
+    assert response.status_code == 401
+
+
+def test_retomar_campanha_requires_admin(app):
+    response = app.test_client().post("/admin/campanhas/retomar")
+    assert response.status_code == 401
+
+
+def test_pausar_campanha_marca_pausado(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+
+    response = app.test_client().post(
+        "/admin/campanhas/pausar", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+
+    assert response.status_code == 302
+    conn = campaigns_storage.connect(campaigns_db_path)
+    assert campaigns_storage.envios_pausados(conn) is True
+
+
+def test_retomar_campanha_desmarca_pausado(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.pausar_envios(conn, "admin")
+
+    response = app.test_client().post(
+        "/admin/campanhas/retomar", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+
+    assert response.status_code == 302
+    conn = campaigns_storage.connect(campaigns_db_path)
+    assert campaigns_storage.envios_pausados(conn) is False
+
+
+def test_listar_leads_mostra_aviso_quando_pausado(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.pausar_envios(conn, "admin")
+
+    response = app.test_client().get(
+        "/admin/campanhas/leads", headers=_basic_auth_header("admin", "senha-secreta")
+    )
+
+    assert response.status_code == 200
+    assert "pausado".encode() in response.data
+    assert b"Retomar envios" in response.data
+
+
+def test_rodar_agora_post_nao_envia_quando_pausado(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("ADMIN_PASSWORD", "senha-secreta")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    campaigns_storage.pausar_envios(conn, "admin")
+
+    with patch("src.campaigns.engine.send_email_html") as mock_send:
+        response = app.test_client().post(
+            "/admin/campanhas/rodar-agora", headers=_basic_auth_header("admin", "senha-secreta")
+        )
+
+    assert response.status_code == 200
+    mock_send.assert_not_called()
+    assert "pausado".encode() in response.data
+
+
+def test_cron_rodar_nao_envia_quando_pausado(app, monkeypatch, campaigns_db_path):
+    monkeypatch.setenv("CRON_SECRET", "segredo-cron")
+    monkeypatch.setenv("SMTP_HOST", "smtp.host")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USERNAME", "user")
+    monkeypatch.setenv("SMTP_PASSWORD", "pass")
+
+    conn = campaigns_storage.connect(campaigns_db_path)
+    campaigns_storage.create_lead(conn, "11.222.333/0001-44", TESE, razao_social="Empresa X", email="x@exemplo.com")
+    campaigns_storage.pausar_envios(conn, "admin")
+
+    with patch("src.campaigns.engine.send_email_html") as mock_send:
+        response = app.test_client().post(
+            "/cron/campanhas/rodar", headers={"Authorization": "Bearer segredo-cron"}
+        )
+
+    assert response.status_code == 200
+    mock_send.assert_not_called()
+    assert response.get_json()["pausado"] is True
+
+
 def test_limpar_envios_fantasma_hoje_requires_admin(app):
     response = app.test_client().post("/admin/campanhas/limpar-envios-fantasma-hoje")
     assert response.status_code == 401

@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS campanha_notificacoes_diarias (
     enviado_em TEXT NOT NULL,
     PRIMARY KEY (tipo, data)
 );
+
+CREATE TABLE IF NOT EXISTS campanha_config (
+    chave TEXT PRIMARY KEY,
+    valor TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL,
+    atualizado_por TEXT
+);
 """
 
 
@@ -245,6 +252,43 @@ def marcar_notificado_hoje(conn: sqlite3.Connection, tipo: str, hoje: date | Non
     conn.execute(
         "INSERT OR IGNORE INTO campanha_notificacoes_diarias (tipo, data, enviado_em) VALUES (?, ?, ?)",
         (tipo, data, enviado_em),
+    )
+    conn.commit()
+
+
+_CHAVE_ENVIOS_PAUSADOS = "envios_pausados"
+
+
+def envios_pausados(conn: sqlite3.Connection) -> bool:
+    """Se True, `_executar_campanha_diaria` (cron e botão manual) não
+    dispara nenhum e-mail — usado pra pausar a campanha inteira sem
+    precisar desativar o agendador externo nem redeployar nada."""
+    row = conn.execute(
+        "SELECT valor FROM campanha_config WHERE chave = ?", (_CHAVE_ENVIOS_PAUSADOS,)
+    ).fetchone()
+    return row is not None and row["valor"] == "1"
+
+
+def pausar_envios(conn: sqlite3.Connection, quem: str) -> None:
+    agora = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO campanha_config (chave, valor, atualizado_em, atualizado_por) VALUES (?, '1', ?, ?)
+        ON CONFLICT(chave) DO UPDATE SET valor = '1', atualizado_em = excluded.atualizado_em, atualizado_por = excluded.atualizado_por
+        """,
+        (_CHAVE_ENVIOS_PAUSADOS, agora, quem),
+    )
+    conn.commit()
+
+
+def retomar_envios(conn: sqlite3.Connection, quem: str) -> None:
+    agora = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        """
+        INSERT INTO campanha_config (chave, valor, atualizado_em, atualizado_por) VALUES (?, '0', ?, ?)
+        ON CONFLICT(chave) DO UPDATE SET valor = '0', atualizado_em = excluded.atualizado_em, atualizado_por = excluded.atualizado_por
+        """,
+        (_CHAVE_ENVIOS_PAUSADOS, agora, quem),
     )
     conn.commit()
 

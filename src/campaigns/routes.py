@@ -71,6 +71,13 @@ _LEADS_TEMPLATE = page("Campanha — Leads", """
    <a href="/admin/campanhas/leads/aparar">Podar lista de leads</a>
 </p>
 
+{% if pausado %}
+<div class="alert">Envio de e-mails da campanha está <strong>pausado</strong> — nem o cron automático nem o botão
+"Rodar campanha agora" disparam e-mail enquanto isso. <form method="post" action="/admin/campanhas/retomar" class="inline"><button type="submit">Retomar envios</button></form></div>
+{% else %}
+<div class="card"><form method="post" action="/admin/campanhas/pausar" class="inline"><button type="submit">Pausar envio de e-mails</button></form></div>
+{% endif %}
+
 <div class="card">
 <h2 style="margin-top:0">Painel — o que já saiu</h2>
 <table>
@@ -226,7 +233,10 @@ use isso pra testar, ou se o agendamento automático do Vercel atrasar ou falhar
   <button type="submit">Rodar agora</button>
 </form>
 {% if resultado %}
-  {% if resultado.error %}
+  {% if resultado.pausado %}
+  <div class="alert">Envio de e-mails está pausado — nenhum e-mail foi disparado.
+  <a href="/admin/campanhas/leads">Retome em Leads da campanha &rarr;</a></div>
+  {% elif resultado.error %}
   <div class="alert">{{ resultado.error }}</div>
   {% else %}
   <h2>Resultado</h2>
@@ -298,10 +308,31 @@ def listar_leads():
     hoje_iso = datetime.combine(date.today(), time.min, tzinfo=timezone.utc).isoformat()
     semana_iso = datetime.combine(date.today() - timedelta(days=7), time.min, tzinfo=timezone.utc).isoformat()
     metricas = storage.metricas_por_tese(conn, hoje_iso, semana_iso)
+    pausado = storage.envios_pausados(conn)
     return render_template_string(
         _LEADS_TEMPLATE, leads=leads, tese=tese, teses=_teses_conhecidas(conn), metricas=metricas,
-        estagios=ESTAGIOS_LEAD, estagio_filtro=estagio_filtro,
+        estagios=ESTAGIOS_LEAD, estagio_filtro=estagio_filtro, pausado=pausado,
     )
+
+
+@bp.post("/admin/campanhas/pausar")
+def pausar_campanha():
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    conn = _connect()
+    storage.pausar_envios(conn, _quem_atual())
+    return redirect("/admin/campanhas/leads")
+
+
+@bp.post("/admin/campanhas/retomar")
+def retomar_campanha():
+    unauthorized = require_admin()
+    if unauthorized:
+        return unauthorized
+    conn = _connect()
+    storage.retomar_envios(conn, _quem_atual())
+    return redirect("/admin/campanhas/leads")
 
 
 @bp.post("/admin/campanhas/leads/<int:lead_id>/estagio")
@@ -542,6 +573,13 @@ def _executar_campanha_diaria() -> dict:
     nem forçar por aqui — o botão manual garante que o envio sempre pode
     ser disparado na hora, autenticado por login de admin.
     """
+    conn_check = _connect()
+    if storage.envios_pausados(conn_check):
+        conn_check.close()
+        print("[campanha_diaria] pausado — nenhum e-mail disparado")
+        return {"pausado": True}
+    conn_check.close()
+
     smtp_host = os.environ.get("SMTP_HOST")
     smtp_port = os.environ.get("SMTP_PORT")
     smtp_username = os.environ.get("SMTP_USERNAME")

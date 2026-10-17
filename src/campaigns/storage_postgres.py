@@ -71,6 +71,13 @@ CREATE TABLE IF NOT EXISTS campanha_notificacoes_diarias (
     enviado_em TEXT NOT NULL,
     PRIMARY KEY (tipo, data)
 );
+
+CREATE TABLE IF NOT EXISTS campanha_config (
+    chave TEXT PRIMARY KEY,
+    valor TEXT NOT NULL,
+    atualizado_em TEXT NOT NULL,
+    atualizado_por TEXT
+);
 """
 
 _CONNECTION_ENV_VARS = ("DATABASE_URL", "POSTGRES_URL", "POSTGRES_URL_NON_POOLING")
@@ -322,6 +329,45 @@ def marcar_notificado_hoje(conn, tipo: str, hoje: date | None = None) -> None:
             ON CONFLICT (tipo, data) DO NOTHING
             """,
             (tipo, data, enviado_em),
+        )
+    conn.commit()
+
+
+_CHAVE_ENVIOS_PAUSADOS = "envios_pausados"
+
+
+def envios_pausados(conn) -> bool:
+    """Se True, `_executar_campanha_diaria` (cron e botão manual) não
+    dispara nenhum e-mail — usado pra pausar a campanha inteira sem
+    precisar desativar o agendador externo nem redeployar nada."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT valor FROM campanha_config WHERE chave = %s", (_CHAVE_ENVIOS_PAUSADOS,))
+        row = cur.fetchone()
+    return row is not None and row["valor"] == "1"
+
+
+def pausar_envios(conn, quem: str) -> None:
+    agora = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO campanha_config (chave, valor, atualizado_em, atualizado_por) VALUES (%s, '1', %s, %s)
+            ON CONFLICT (chave) DO UPDATE SET valor = '1', atualizado_em = EXCLUDED.atualizado_em, atualizado_por = EXCLUDED.atualizado_por
+            """,
+            (_CHAVE_ENVIOS_PAUSADOS, agora, quem),
+        )
+    conn.commit()
+
+
+def retomar_envios(conn, quem: str) -> None:
+    agora = datetime.now(timezone.utc).isoformat()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO campanha_config (chave, valor, atualizado_em, atualizado_por) VALUES (%s, '0', %s, %s)
+            ON CONFLICT (chave) DO UPDATE SET valor = '0', atualizado_em = EXCLUDED.atualizado_em, atualizado_por = EXCLUDED.atualizado_por
+            """,
+            (_CHAVE_ENVIOS_PAUSADOS, agora, quem),
         )
     conn.commit()
 
